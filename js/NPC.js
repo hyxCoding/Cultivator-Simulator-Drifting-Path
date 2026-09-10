@@ -25,6 +25,7 @@ class NPC {
         this.width = 24;
         this.height = 32;
         this.facing = 'down';
+        this.defaultFacing = 'down';        // NPC默认朝向（对话结束后恢复）
         this.moveSpeed = config.moveSpeed || 80;
         this.isStatic = config.isStatic || false; // 是否静止NPC
         
@@ -65,11 +66,30 @@ class NPC {
         this.assignedQuests = config.assignedQuests || []; // NPC可发布的任务ID列表
         this.questProgress = new Map(); // 玩家与该NPC的任务进度
         
+        // ========== NPC自定义状态 ==========
+        this.npcState = config.initialNpcState || {}; // NPC内部状态（如受伤、已治疗等）
+        this.animationOverridden = false;         // 外部锁定动画，阻止 updateAnimation 覆盖
+        
+        // ========== 基础动画配置（idle / walk 的帧尺寸、排列方式） ==========
+        this.baseAnimations = config.baseAnimations || {};
+        
+        // ========== NPC显示尺寸（来自基础空闲动画的帧尺寸） ==========
+        if (this.baseAnimations.idle) {
+            this.width = this.baseAnimations.idle.frameWidth || 24;
+            this.height = this.baseAnimations.idle.frameHeight || 32;
+        }
+        // 显示缩放系数（渲染时 displaySize = frameSize * displayScale）
+        this.displayScale = 2;
+        
+        // ========== 额外动画配置 ==========
+        this.extraAnimations = config.extraAnimations || []; // NPC额外动画配置
+        
         // ========== 回调 ==========
         this.onInteract = null;      // 交互回调
         this.onReachTarget = null;   // 到达目标回调
         this.onDialogueEnd = null;   // 对话结束回调
         this.onOpenShop = null;      // 打开商店回调
+        this.onBreathHeal = null;      // 定息引气回调
         
         // ========== 初始化 ==========
         this.initAnimations();
@@ -86,38 +106,63 @@ class NPC {
         // NPC动画资源路径基于NPC ID
         const resourcePrefix = `npc.${this.id}`;
         
-        const animationConfigs = [
-            {
-                name: 'idle',
-                resourcePath: `${resourcePrefix}_idle`,
-                frameWidth: 24,
-                frameHeight: 32,
-                directionMode: 'row',
-                directions: {
-                    down:  { col: 0, frames: 1 },
-                    up:    { col: 3, frames: 1 },
-                    left:  { col: 1, frames: 1 },
-                    right: { col: 2, frames: 1 },
-                },
-                fps: 8,
-                loop: true,
+        const animationConfigs = [];
+        
+        // ----- 基础 idle 动画 -----
+        // 优先使用 NPC 自定义配置，否则回退默认
+        const idleAnim = this.baseAnimations.idle || {
+            frameWidth: 24,
+            frameHeight: 32,
+            directionMode: 'row',
+            directions: {
+                down:  { row: 0, frames: 1 },
+                up:    { row: 3, frames: 1 },
+                left:  { row: 1, frames: 1 },
+                right: { row: 2, frames: 1 },
             },
-            {
-                name: 'walk',
-                resourcePath: `${resourcePrefix}_walk`,
-                frameWidth: 24,
-                frameHeight: 32,
-                directionMode: 'row',
-                directions: {
-                    down:  { col: 0, frames: 1 },
-                    up:    { col: 3, frames: 1 },
-                    left:  { col: 1, frames: 1 },
-                    right: { col: 2, frames: 1 },
-                },
-                fps: 10,
-                loop: true,
+            fps: 8,
+            loop: true,
+        };
+        animationConfigs.push({
+            name: 'idle',
+            resourcePath: `${resourcePrefix}_idle`,
+            frameWidth: idleAnim.frameWidth,
+            frameHeight: idleAnim.frameHeight,
+            directionMode: idleAnim.directionMode,
+            directions: idleAnim.directions,
+            fps: idleAnim.fps,
+            loop: idleAnim.loop,
+        });
+        
+        // ----- 基础 walk 动画 -----
+        const walkAnim = this.baseAnimations.walk || {
+            frameWidth: 24,
+            frameHeight: 32,
+            directionMode: 'row',
+            directions: {
+                down:  { row: 0, frames: 1 },
+                up:    { row: 3, frames: 1 },
+                left:  { row: 1, frames: 1 },
+                right: { row: 2, frames: 1 },
             },
-        ];
+            fps: 10,
+            loop: true,
+        };
+        animationConfigs.push({
+            name: 'walk',
+            resourcePath: `${resourcePrefix}_walk`,
+            frameWidth: walkAnim.frameWidth,
+            frameHeight: walkAnim.frameHeight,
+            directionMode: walkAnim.directionMode,
+            directions: walkAnim.directions,
+            fps: walkAnim.fps,
+            loop: walkAnim.loop,
+        });
+        
+        // ----- 额外动画（heal、stand_idle 等） -----
+        if (this.extraAnimations.length > 0) {
+            animationConfigs.push(...this.extraAnimations);
+        }
         
         this.loadAnimations(animationConfigs);
     }
@@ -153,6 +198,85 @@ class NPC {
         
         this.animationManager.play('idle');
         this.animationManager.setDirection('down');
+    }
+
+    // ==================== 动画变体切换 ====================
+
+    /**
+     * 切换到指定动画（如 heal、stand_idle 等额外动画）
+     * @param {string} animationName - 动画名称
+     * @param {Object} [options] - 播放选项
+     */
+    setAnimation(animationName, options = {}) {
+        if (this.animationManager.hasAnimation(animationName)) {
+            this.animationManager.play(animationName, { loop: options.loop !== false, ...options });
+        } else {
+            console.warn(`NPC ${this.id} 没有动画: ${animationName}`);
+        }
+    }
+
+    /**
+     * 恢复默认 idle 动画
+     */
+    setIdleAnimation() {
+        this.animationManager.play('idle', { loop: true });
+    }
+
+    // ==================== NPC状态管理 ====================
+
+    /**
+     * 设置NPC内部状态
+     * @param {string} key - 状态键
+     * @param {*} value - 状态值
+     */
+    setNpcState(key, value) {
+        this.npcState[key] = value;
+    }
+
+    /**
+     * 获取NPC内部状态
+     * @param {string} key - 状态键
+     * @returns {*} 状态值
+     */
+    getNpcState(key) {
+        return this.npcState[key];
+    }
+
+    // ==================== NPC间交互 ====================
+
+    /**
+     * 阿禾对阿砚执行治疗（自动动画序列）
+     * - 阿禾播放 heal 动画
+     * - 阿砚切换为站立动画
+     * 此方法由任务完成回调触发，不需要玩家交互
+     * @param {NPC} ayan - 阿砚NPC实例
+     */
+    performHeal(ayan) {
+        if (!ayan || this.id !== 'ahe') return;
+
+        // 锁定动画（阻止 updateAnimation 覆盖）
+        this.animationOverridden = true;
+
+        // 阿禾播放治疗动画（播放一次，不循环）
+        this.setAnimation('heal', { loop: false });
+        this.facing = 'down';
+
+        // 动画播放完成后，阿砚切换为站立状态
+        // 估算 heal 动画时长：假设单帧，约1秒
+        const healDuration = 1000;
+
+        setTimeout(() => {
+            // 阿砚切换为站立 idle（锁定动画，不被 updateAnimation 覆盖）
+            ayan.animationOverridden = true;
+            if (ayan.animationManager.hasAnimation('stand_idle')) {
+                ayan.setAnimation('stand_idle', { loop: true });
+                ayan.setNpcState('healed', true);
+                console.log(`[NPC] ${ayan.name} 已被 ${this.name} 治愈，切换为站立动画`);
+            }
+            // 阿禾恢复 idle，解锁动画
+            this.animationOverridden = false;
+            this.setIdleAnimation();
+        }, healDuration);
     }
 
     // ==================== 更新逻辑 ====================
@@ -470,6 +594,12 @@ class NPC {
      * 更新动画
      */
     updateAnimation(deltaTime) {
+        // 如果动画被外部锁定（如定息引气序列），跳过自动切换，仅更新当前动画
+        if (this.animationOverridden) {
+            this.animationManager.update(deltaTime);
+            return;
+        }
+
         if (this.isMoving) {
             this.animationManager.play('walk', { reset: false, loop: true });
             this.animationManager.setDirection(this.facing);
@@ -562,6 +692,10 @@ class NPC {
      */
     endDialogue() {
         this.dialogueSystem.endDialogue();
+        
+        // 恢复默认朝向（对话期间 faceTarget 改变了朝向）
+        this.facing = this.defaultFacing || 'down';
+        this.animationManager.setDirection(this.facing);
         
         this.changeState('idle');
         
@@ -659,6 +793,26 @@ class NPC {
         return map.worldToTile(this.position.x, this.position.y);
     }
 
+    /**
+     * 重新定位NPC（瓦片坐标 → 世界坐标）
+     * 用于阿禾从开场移到救助点、周叔从被困地回村落等剧情搬迁
+     * @param {number} tileX - 目标瓦片 X
+     * @param {number} tileY - 目标瓦片 Y
+     * @param {GameMap} map - 当前地图实例（用于 tileToWorld 转换）
+     */
+    reposition(tileX, tileY, map) {
+        if (!map) return;
+        const worldPos = map.tileToWorld(tileX, tileY);
+        this.position.x = worldPos.x;
+        this.position.y = worldPos.y;
+        // 重置移动状态
+        this.isMoving = false;
+        this.moveTarget = null;
+        this.path = [];
+        this.currentPathIndex = 0;
+        console.log(`[NPC] ${this.name} 搬迁至瓦片 (${tileX}, ${tileY}) → 世界 (${Math.round(worldPos.x)}, ${Math.round(worldPos.y)})`);
+    }
+
     // ==================== 渲染 ====================
 
     /**
@@ -673,9 +827,35 @@ class NPC {
             ctx,
             screenX,
             screenY,
-            this.width * 2,
-            this.height * 2
+            this.width * this.displayScale,
+            this.height * this.displayScale
         );
+    }
+
+    /**
+     * 渲染交互提示（按 E 对话）
+     * 在 NPC 头顶显示，拾取物提示的同款样式
+     */
+    renderPrompt(ctx, camera) {
+        if (!this.canInteract) return;
+        const renderPos = camera ? camera.getRenderPosition() : { x: 0, y: 0 };
+        const screenX = this.position.x - renderPos.x;
+        const screenY = this.position.y - renderPos.y - this.height * this.displayScale - 10;
+        const text = '按 E 对话';
+        ctx.font = 'bold 13px Microsoft YaHei';
+        const textWidth = ctx.measureText(text).width;
+        // 半透明背景
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        const px = screenX - textWidth / 2 - 10;
+        const py = screenY - 10;
+        ctx.beginPath();
+        ctx.roundRect(px, py, textWidth + 20, 24, 6);
+        ctx.fill();
+        // 金色文字
+        ctx.fillStyle = '#FFD700';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, screenX, screenY);
     }
 
     // ==================== 序列化 ====================
@@ -697,6 +877,7 @@ class NPC {
             dialogueSystem: this.dialogueSystem.serialize(),
             questProgress: Array.from(this.questProgress.entries()),
             animationManager: this.animationManager.serialize(),
+            npcState: { ...this.npcState },
         };
     }
 
@@ -719,5 +900,11 @@ class NPC {
         if (data.dialogueSystem) this.dialogueSystem.deserialize(data.dialogueSystem);
         if (data.questProgress) this.questProgress = new Map(data.questProgress);
         if (data.animationManager) this.animationManager.deserialize(data.animationManager);
+        if (data.npcState) this.npcState = { ...data.npcState };
+        
+        // 读档后恢复站立动画（如果已被治疗过）
+        if (this.npcState && this.npcState.healed && this.animationManager.hasAnimation('stand_idle')) {
+            this.animationManager.play('stand_idle', { loop: true });
+        }
     }
 }

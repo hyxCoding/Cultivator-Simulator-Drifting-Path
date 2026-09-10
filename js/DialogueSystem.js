@@ -16,6 +16,7 @@ class DialogueSystem {
         this.dialogueHistory = [];      // 对话历史
         this.isActive = false;          // 对话是否进行中
         this.currentOptions = [];       // 当前可选项
+        this._savedOnComplete = [];     // 保存的 on_complete 列表（endDialogue 清空前保存）
         
         // 回调
         this.onDialogueStart = null;
@@ -48,6 +49,7 @@ class DialogueSystem {
         this.currentDialogueId = dialogue.id;
         this.isActive = true;
         this.dialogueHistory.push(dialogue.id);
+        this._savedOnComplete = (dialogue.on_complete || []).slice(); // 保存 on_complete 列表
         
         if (this.onDialogueStart) {
             this.onDialogueStart(this.currentDialogue);
@@ -57,9 +59,28 @@ class DialogueSystem {
     }
 
     /**
+     * 获取当前对话的 on_complete 回调列表
+     * @returns {string[]}
+     */
+    getCurrentOnComplete() {
+        if (this.currentDialogue) {
+            return this.currentDialogue.on_complete || [];
+        }
+        // 对话已结束但还未读取 on_complete 时，返回保存的列表
+        return this._savedOnComplete || [];
+    }
+
+    /**
      * 结束对话
      */
     endDialogue() {
+        if (!this.isActive) return; // 防止重复调用
+        
+        // 在清空前保存 on_complete 列表
+        if (this.currentDialogue) {
+            this._savedOnComplete = (this.currentDialogue.on_complete || []).slice();
+        }
+        
         this.isActive = false;
         this.currentDialogue = null;
         this.currentDialogueId = null;
@@ -152,10 +173,22 @@ class DialogueSystem {
                     this.npc.onOpenShop();
                 }
                 break;
+            case 'start_basic_training':
+                // 开始基础训练
+                if (this.npc.onStartTraining) {
+                    this.npc.onStartTraining();
+                }
+                break;
+            case 'start_breath_heal_sequence':
+                // 定息引气：阿禾引导玩家为阿砚疗伤
+                if (this.npc.onBreathHeal) {
+                    this.npc.onBreathHeal();
+                }
+                break;
             default:
-                if (action.startsWith('start_quest_')) {
+                if (action.startsWith('start_quest_') || action.startsWith('accept_quest_')) {
                     // 开始任务
-                    const questId = action.replace('start_quest_', '');
+                    const questId = action.replace(/^(start_quest_|accept_quest_)/, '');
                     if (this.npc.onAssignQuest) {
                         this.npc.onAssignQuest(questId);
                     }
@@ -197,3 +230,4 @@ class DialogueSystem {
         }
     }
 }
+

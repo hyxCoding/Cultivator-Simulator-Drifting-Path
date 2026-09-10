@@ -114,8 +114,8 @@ class Shop {
             });
         }
 
-        if (this.shopItems.length === 0 && gameConfig.npcConfigs && gameConfig.npcConfigs[npc.id]) {
-            const npcConfig = gameConfig.npcConfigs[npc.id];
+        if (this.shopItems.length === 0 && gameConfig.getNPCConfig) {
+            const npcConfig = gameConfig.getNPCConfig(npc.id);
             if (npcConfig.shopItems && Array.isArray(npcConfig.shopItems)) {
                 npcConfig.shopItems.forEach(item => {
                     const itemConfig = gameConfig.getItem(item.itemId);

@@ -49,15 +49,25 @@ class Player {
         this.attackDuration = 0.3;
         this.isAttacking = false;
         this.attackTimer = 0;
-        
+
+        // ========== 闪避相关 ==========
+        this.isDodging = false;
+        this.dodgeCooldown = 0;
+        this.dodgeDuration = 0.25;
+        this.dodgeTimer = 0;
+        this.dodgeSpeed = this.moveSpeed * 3;
+
         // ========== 交互相关 ==========
         this.nearbyNPC = null;
+        this.nearbySignpost = null;
         this.nearbyMonster = null;
         this.nearbyTeleportArray = null;
+        this.nearbyPickupItem = null;
         this.interactionRadius = 50;
         
         // ========== 任务系统 ==========
         this.questSystem = new QuestSystem();
+        this.questItemSystem = new QuestItemSystem();
         
         // ========== 回调 ==========
         this.onAttack = null;   // 攻击回调
@@ -86,10 +96,10 @@ class Player {
                 frameHeight: 32,
                 directionMode: 'row',
                 directions: {
-                    down:  { row: 0, frames: 4 },
-                    up:    { row: 3, frames: 4 },
-                    left:  { row: 1, frames: 4 },
-                    right: { row: 2, frames: 4 },
+                    down:  { row: 0, frames: 1 },
+                    left:  { row: 1, frames: 1 },
+                    right: { row: 2, frames: 1 },
+                    up:    { row: 3, frames: 1 },
                 },
                 fps: 8,
                 loop: true,
@@ -225,9 +235,14 @@ class Player {
         // 更新攻击状态
         this.updateAttack(deltaTime);
         
-        // 处理移动
-        if (!this.isAttacking && !this.isInteracting && !this.isInBattle) {
+        // 处理移动（闪避时由 performDodge 控制冲刺，不响应常规移动输入）
+        if (!this.isAttacking && !this.isInteracting && !this.isInBattle && !this.isDodging) {
             this.updateMovement(deltaTime, input, map);
+        } else if (this.isDodging) {
+            // 闪避中保持velocity方向，应用碰撞
+            const newX = this.position.x + this.velocity.x * deltaTime;
+            const newY = this.position.y + this.velocity.y * deltaTime;
+            this.moveWithCollision(newX, newY, map);
         }
         
         // 更新交互检测
@@ -242,7 +257,20 @@ class Player {
         if (this.attackCooldown > 0) {
             this.attackCooldown -= deltaTime;
         }
-        
+
+        // 更新闪避
+        if (this.isDodging) {
+            this.dodgeTimer -= deltaTime;
+            if (this.dodgeTimer <= 0) {
+                this.isDodging = false;
+                this.isInvincible = false;
+                this.invincibleTimer = 0;
+            }
+        }
+        if (this.dodgeCooldown > 0) {
+            this.dodgeCooldown -= deltaTime;
+        }
+
         // 更新任务系统
         this.questSystem.update(deltaTime);
         
@@ -254,6 +282,14 @@ class Player {
      * 更新移动
      */
     updateMovement(deltaTime, input, map) {
+        // 当 movementBlocked 被设置时(如任务栏打开)，不响应移动输入
+        if (input.movementBlocked) {
+            this.isMoving = false;
+            this.velocity.x = 0;
+            this.velocity.y = 0;
+            return;
+        }
+
         let moveX = 0;
         let moveY = 0;
         
@@ -386,11 +422,17 @@ class Player {
         const nearbyNPCs = map.getNPCsNearby(this.position, this.interactionRadius);
         this.nearbyNPC = nearbyNPCs.length > 0 ? nearbyNPCs[0] : null;
         
+        const nearbySignposts = map.getSignpostsNearby ? map.getSignpostsNearby(this.position, this.interactionRadius) : [];
+        this.nearbySignpost = nearbySignposts.length > 0 ? nearbySignposts[0] : null;
+
         const nearbyMonsters = map.getMonstersNearby(this.position, this.interactionRadius);
         this.nearbyMonster = nearbyMonsters.length > 0 ? nearbyMonsters[0] : null;
 
         const nearbyTeleporters = map.getTeleportersNearby ? map.getTeleportersNearby(this.position, this.interactionRadius) : [];
         this.nearbyTeleportArray = nearbyTeleporters.length > 0 ? nearbyTeleporters[0] : null;
+
+        const nearbyPickups = map.getPickupItemsNearby ? map.getPickupItemsNearby(this.position, this.interactionRadius) : [];
+        this.nearbyPickupItem = nearbyPickups.length > 0 ? nearbyPickups[0] : null;
     }
 
     /**
@@ -450,6 +492,45 @@ class Player {
         }
         
         this.executeAttack();
+        return true;
+    }
+
+    /**
+     * 执行闪避
+     * 向当前移动方向快速冲刺，期间无敌
+     */
+    performDodge() {
+        if (this.isDodging || this.dodgeCooldown > 0 || !this.isAlive || this.isInteracting) {
+            return false;
+        }
+
+        this.isDodging = true;
+        this.dodgeTimer = this.dodgeDuration;
+        this.dodgeCooldown = 1.0; // 1秒冷却
+
+        // 向当前方向冲刺
+        const dirX = this.moveDirection.x || 0;
+        const dirY = this.moveDirection.y || 0;
+
+        // 如果没有移动方向，默认为朝向方向
+        const dodgeVecX = dirX !== 0 ? dirX : (this.facing === 'right' ? 1 : this.facing === 'left' ? -1 : 0);
+        const dodgeVecY = dirY !== 0 ? dirY : (this.facing === 'down' ? 1 : this.facing === 'up' ? -1 : 0);
+
+        // 归一化
+        const len = Math.sqrt(dodgeVecX * dodgeVecX + dodgeVecY * dodgeVecY);
+        if (len > 0) {
+            this.velocity.x = (dodgeVecX / len) * this.dodgeSpeed;
+            this.velocity.y = (dodgeVecY / len) * this.dodgeSpeed;
+        }
+
+        // 闪避时无敌
+        this.isInvincible = true;
+        this.invincibleTimer = this.dodgeDuration;
+
+        // 播放闪避动画（尝试播放skill动画作为闪避效果）
+        this.animationManager.play('skill', { reset: true, loop: false, direction: this.facing });
+
+        console.log('[Player] 闪避');
         return true;
     }
 

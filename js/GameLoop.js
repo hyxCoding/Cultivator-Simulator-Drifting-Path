@@ -203,7 +203,25 @@ class GameLoop {
             });
         }
         
-        // 5. 更新地图场景动画（落叶、飘动等环境效果）
+        // 5. 更新可拾取物品（浮动动画等）
+        if (this.currentMap && this.currentMap.pickupItems) {
+            this.currentMap.pickupItems.forEach(pickup => {
+                if (pickup.update) {
+                    pickup.update(deltaTime);
+                }
+            });
+        }
+
+        // 5b. 更新路标（浮动动画等）
+        if (this.currentMap && this.currentMap.signposts) {
+            this.currentMap.signposts.forEach(signpost => {
+                if (signpost && signpost.update) {
+                    signpost.update(deltaTime);
+                }
+            });
+        }
+        
+        // 6. 更新地图场景动画（落叶、飘动等环境效果）
         if (this.currentMap && this.currentMap.updateSceneAnimations) {
             this.currentMap.updateSceneAnimations(deltaTime);
         }

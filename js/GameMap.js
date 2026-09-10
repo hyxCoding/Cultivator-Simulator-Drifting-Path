@@ -37,6 +37,8 @@ class GameMap {
         this.npcs = new Map();    // NPC实例 {id: npcInstance}
         this.monsters = new Map(); // 怪物实例 {id: monsterInstance}
         this.teleporters = new Map(); // 传送法阵实例 {id: TeleportArray}
+        this.pickupItems = new Map(); // 可拾取物品 {id: PickupItem}
+        this.signposts = new Map();   // 路标 {id: Signpost}
         
         // 地图入口点
         this.entryPoint = mapConfig.entryPoint || { x: 0, y: 0 };
@@ -86,9 +88,9 @@ class GameMap {
                 const npcPosition = this.mapConfig.npcPositions[npcId];
                 const worldPosition = this.tileToWorld(npcPosition.x, npcPosition.y);
                 
-                // 从 GameConfig 获取 NPC 完整配置
+                // 从 GameConfig 获取 NPC 完整配置（通过 ChapterLoader 注册的数据）
                 const gameConfig = GameConfig.getInstance();
-                const npcConfig = gameConfig.npcConfigs ? gameConfig.npcConfigs[npcId] : null;
+                const npcConfig = gameConfig.getNPCConfig ? gameConfig.getNPCConfig(npcId) : null;
                 
                 if (npcConfig) {
                     // 创建完整 NPC 实例
@@ -102,6 +104,9 @@ class GameMap {
                         assignedQuests: npcConfig.assignedQuests || [],
                         patrolPoints: npcConfig.patrolPoints || [],
                         shopItems: npcConfig.shopItems || [],
+                        extraAnimations: npcConfig.extraAnimations || [],
+                        initialNpcState: npcConfig.initialNpcState || {},
+                        baseAnimations: npcConfig.baseAnimations || {},
                     });
                     
                     this.npcs.set(npcId, npc);
@@ -174,7 +179,30 @@ class GameMap {
                 this.teleporters.set(teleport.id, teleport);
             }
         }
-        
+
+        // 初始化路标（使用世界坐标，无需 tileToWorld 转换）
+        if (this.mapConfig.signposts) {
+            for (const signpostKey in this.mapConfig.signposts) {
+                const signpostConfig = this.mapConfig.signposts[signpostKey];
+
+                const signpost = new Signpost({
+                    id: signpostConfig.id || signpostKey,
+                    name: signpostConfig.name || '路标',
+                    position: signpostConfig.position || { x: 0, y: 0 },
+                    radius: signpostConfig.radius || 40,
+                    promptText: signpostConfig.promptText || '开始交互',
+                    image: signpostConfig.image || null,
+                    imageWidth: signpostConfig.imageWidth || null,
+                    imageHeight: signpostConfig.imageHeight || null,
+                    questRequired: signpostConfig.questRequired || null,
+                    gameId: signpostConfig.gameId || null,
+                    oneShot: signpostConfig.oneShot ?? false,
+                });
+
+                this.signposts.set(signpost.id, signpost);
+            }
+        }
+
         this.isInitialized = true;
     }
 
@@ -225,6 +253,9 @@ class GameMap {
         if (player && !player.position) {
             player.position = this.getEntryWorldPosition();
         }
+        
+        // ====== 任务完成回调已迁移至 Main.setupQuestCallbacks() ======
+        // 原因：Main 统一管理避免多地图重复注册
     }
 
     /**
@@ -260,6 +291,38 @@ class GameMap {
      */
     addTeleport(teleportKey, teleportInstance) {
         this.teleporters.set(teleportKey, teleportInstance);
+    }
+
+    /**
+     * 添加可拾取物品
+     * @param {PickupItem} pickupItem
+     */
+    addPickupItem(pickupItem) {
+        this.pickupItems.set(pickupItem.id, pickupItem);
+    }
+
+    /**
+     * 移除可拾取物品
+     * @param {string} pickupId
+     */
+    removePickupItem(pickupId) {
+        this.pickupItems.delete(pickupId);
+    }
+
+    /**
+     * 获取附近的可拾取物品
+     * @param {Object} position - {x, y}
+     * @param {number} radius - 检测半径
+     * @returns {PickupItem[]}
+     */
+    getPickupItemsNearby(position, radius) {
+        const nearby = [];
+        for (const [, item] of this.pickupItems) {
+            if (item.isPlayerInRange(position)) {
+                nearby.push(item);
+            }
+        }
+        return nearby;
     }
 
     /**
@@ -462,7 +525,25 @@ class GameMap {
                 }
             });
         }
-        
+
+        // 6. 渲染可拾取物品（环境交互对象）
+        if (this.pickupItems) {
+            this.pickupItems.forEach(pickup => {
+                if (pickup && pickup.render) {
+                    pickup.render(ctx, camera);
+                }
+            });
+        }
+
+        // 7. 渲染路标（环境交互对象）
+        if (this.signposts) {
+            this.signposts.forEach(signpost => {
+                if (signpost && signpost.render) {
+                    signpost.render(ctx, camera);
+                }
+            });
+        }
+
         // 注意：不渲染NPC、怪物、玩家
         // 这些由 GameLoop 统一调度渲染
     }
@@ -690,6 +771,22 @@ class GameMap {
         });
 
         return nearbyTeleporters;
+    }
+
+    /**
+     * 获取玩家附近的路标
+     * @param {Object} position - {x, y}
+     * @param {number} radius - 搜索半径
+     * @returns {Array} 路标列表
+     */
+    getSignpostsNearby(position, radius) {
+        const nearby = [];
+        this.signposts.forEach(signpost => {
+            if (signpost && signpost.isActive && signpost.isPlayerInRange(position)) {
+                nearby.push(signpost);
+            }
+        });
+        return nearby;
     }
 
     /**

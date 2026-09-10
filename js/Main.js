@@ -26,6 +26,7 @@ class Main {
         this.battleSystem = null;
         this.miniGameManager = null;
         this.shop = null;   // 商店系统
+        this.trainingManager = null;
         
         // ========== 实体 ==========
         this.player = null;
@@ -85,6 +86,19 @@ class Main {
         // 初始化游戏系统
         this.initGameSystems();
         
+        // 加载第一章剧情配置
+        try {
+            if (window.Chapter1Config && window.chapterLoader) {
+                const chapter1Data = Chapter1Config.getAll();
+                window.chapterLoader.registerChapter(chapter1Data);
+                console.log('[游戏] 第一章剧情配置加载完成');
+            } else {
+                console.warn('[游戏] ChapterLoader或Chapter1Config未加载，跳过章节配置注册');
+            }
+        } catch (error) {
+            console.warn('[游戏] 章节配置加载失败:', error);
+        }
+        
         // 初始化游戏数据管理器
         this.initGameDataManager();
         
@@ -96,6 +110,15 @@ class Main {
         
         // 创建玩家
         this.createPlayer();
+
+        // 注册所有任务到状态机（必须在创建玩家之后，因为 player.questSystem 需先存在）
+        if (this.player && this.player.questSystem) {
+            this.player.questSystem.registerAllQuests();
+            console.log(`[游戏] 已注册 ${this.player.questSystem.quests.size} 个任务`);
+        }
+
+        // 暂存 quest pickup 配置，等任务激活时再创建（questId → [{config, mapId}]）
+        this.pendingQuestPickups = {};
         
         // 加载初始地图（也加 try-catch）
         try {
@@ -105,6 +128,9 @@ class Main {
             // 地图加载失败也继续，只是没有地图
         }
         
+        // 设置任务系统回调
+        this.setupQuestCallbacks();
+
         // 设置游戏循环回调
         this.setupGameLoop();
         
@@ -118,6 +144,126 @@ class Main {
     /**
      * 初始化核心系统
      */
+    setupQuestCallbacks() {
+        if (!this.player || !this.player.questSystem) return;
+        const qs = this.player.questSystem;
+
+        // ====== 任务接受/解锁时（LOCKED → ACTIVE） ======
+        qs.onQuestAccept = (questId) => {
+            console.log(`[Main] 任务解锁: ${questId}`);
+            this.addGameNotification(`新任务已解锁！`);
+
+            // ====== 创建该任务对应的暂存任务道具 ======
+            if (this.pendingQuestPickups[questId]) {
+                for (const { config, mapId } of this.pendingQuestPickups[questId]) {
+                    // 优先在当前地图创建；否则从 MapManager 获取目标地图
+                    let targetMap = this.currentMap;
+                    if (targetMap && mapId && targetMap.mapId !== mapId) {
+                        targetMap = this.mapManager.getMap(mapId);
+                    }
+                    if (targetMap) {
+                        const image = this.resourceManager.getCachedImage(`questItems.${config.itemId}`);
+                        const pickupItem = new PickupItem({
+                            id: config.id,
+                            itemId: config.itemId,
+                            name: config.name,
+                            position: { ...config.position },
+                            count: config.count || 1,
+                            questId: config.questId,
+                            objectiveType: config.objectiveType || 'find_item',
+                            promptText: config.promptText || '按 E 拾取',
+                            image: image,
+                            radius: config.radius || 40,
+                        });
+                        targetMap.addPickupItem(pickupItem);
+                        console.log(`[Main] 创建暂存拾取物: ${config.name} (${config.itemId}) 于地图 ${mapId}`);
+                    } else {
+                        console.warn(`[Main] 无法找到目标地图 ${mapId}，暂存拾取物 ${config.name} 未创建`);
+                    }
+                }
+                delete this.pendingQuestPickups[questId];
+            }
+
+            // ====== 任务解锁后刷新路标可见性 ======
+            // 原因：signpost 初始化时通过 updateQuestGate 将 isActive 设为 false（任务 locked），
+            // 接取后需要重新计算，否则依赖该任务的路标不会显示
+            if (this.currentMap) {
+                this.updateSignpostQuestGates(this.currentMap);
+            }
+
+            const map = this.currentMap;
+            if (!map || !map.npcs) return;
+        };
+
+        // ====== 任务完成时（ACTIVE → COMPLETED）：NPC搬迁 + 治疗 + 道具清除 ======
+        qs.onQuestComplete = (questId, rewards) => {
+            console.log(`[Main] 任务完成: ${questId}`, rewards);
+            const map = this.currentMap;
+
+            // ====== 移除已完成任务对应的任务道具 ======
+            if (map && map.pickupItems) {
+                const toRemove = [];
+                for (const [id, item] of map.pickupItems) {
+                    if (item.questId === questId) {
+                        toRemove.push(id);
+                    }
+                }
+                for (const id of toRemove) {
+                    map.removePickupItem(id);
+                    console.log(`[Main] 移除已完成任务的道具: ${id}`);
+                }
+            }
+
+            if (!map || !map.npcs) return;
+
+            // main_1 完成 → 阿禾迁到救助点
+            if (questId === 'chapter1_main_1') {
+                const ahe = map.npcs.get('ahe');
+                if (ahe && ahe.reposition) {
+                    ahe.reposition(58, 41, map);
+                }
+            }
+            // main_2 完成 → 阿禾治疗阿砚
+            if (questId === 'chapter1_main_2') {
+                const ahe = map.npcs.get('ahe');
+                const ayan = map.npcs.get('ayan');
+                if (ahe && ayan && ahe.performHeal) {
+                    ahe.performHeal(ayan);
+                }
+            }
+            // main_3 完成 → 周叔迁回村落
+            if (questId === 'chapter1_main_3') {
+                const zhoushu = map.npcs.get('zhoushu');
+                if (zhoushu && zhoushu.reposition) {
+                    zhoushu.reposition(65, 41, map);
+                }
+            }
+            // ending_1 完成 → 阿禾迁到码头
+            if (questId === 'chapter1_ending_1') {
+                const ahe = map.npcs.get('ahe');
+                if (ahe && ahe.reposition) {
+                    ahe.reposition(81, 44, map);
+                }
+            }
+            // 奖励通知
+            if (rewards && rewards.exp) console.log(`[奖励] 经验: ${rewards.exp}`);
+            if (rewards && rewards.lingShi) console.log(`[奖励] 灵石: ${rewards.lingShi}`);
+
+            // 任务完成 → 如果路标依赖该任务，保持其可见（completed 状态匹配可见条件）
+            if (this.currentMap) {
+                this.updateSignpostQuestGates(this.currentMap);
+            }
+        };
+
+        // ====== 任务进度更新 ======
+        qs.onQuestProgress = (questId, questState) => {
+            // 任务被接取（从 locked 变为 active）→ 更新路标可见性
+            if (this.currentMap) {
+                this.updateSignpostQuestGates(this.currentMap);
+            }
+        };
+    }
+
     initCoreSystems() {
         this.gameLoop = new GameLoop({
             fps: 60,
@@ -241,6 +387,20 @@ class Main {
         
         // 创建商店系统
         this.shop = new Shop({ main: this });
+
+        // 创建训练管理器
+        this.trainingManager = new TrainingManager();
+        this.trainingManager.onAllCompleted = () => {
+            console.log('[Main] 基础训练全部完成！');
+            // 推进任务进度
+            if (this.player && this.player.questSystem) {
+                for (const [questId] of this.player.questSystem.getActiveQuests()) {
+                    this.player.questSystem.updateQuestProgress(questId, 'complete_training', 'basic');
+                }
+            }
+            // 显示通知
+            this.addGameNotification('基础训练完成！返回向祁伯汇报');
+        };
     }
 
     /**
@@ -324,10 +484,38 @@ class Main {
      */
     handleKeyDown(key, event) {
         const currentScene = this.sceneManager.getCurrentScene();
+
+        // ===== 规则0：小游戏中时，所有外部按键一律忽略 =====
+        if (currentScene && currentScene.sceneId === 'miniGame' && this.miniGameManager && this.miniGameManager.isPlaying) {
+            return;
+        }
+
+        // ===== 规则1：任务栏打开时，只允许 Q / ESC 操作 =====
+        if (this.questUI.isVisible) {
+            if (key === 'escape') {
+                this.questUI.hide();
+            } else if (key === 'q') {
+                this.questUI.hide();
+            }
+            // 其他按键全部忽略
+            return;
+        }
+
+        // ===== 规则2：对话中时，只允许 ESC / J 操作 =====
+        if (this.dialogBox.isVisible) {
+            if (key === 'escape') {
+                this.handleEscapeKey();
+            } else if (key === 'j') {
+                // J 键推进对话（同时防止被外部捕获）
+                this.dialogBox.advance();
+            }
+            return;
+        }
         
         switch (key) {
             case 'escape':
                 // 关闭弹窗
+                this.handleEscapeKey();
                 break;
             case 'q':
                 // 打开/关闭任务UI
@@ -408,9 +596,34 @@ class Main {
             return;
         }
         
+        // 靠近路标 → 触发路标回调（如开启小游戏）
+        if (this.player.nearbySignpost) {
+            const signpost = this.player.nearbySignpost;
+            signpost.activate();
+            // 如果路标关联了小游戏 ID，自动启动
+            if (signpost.gameId) {
+                this.startMiniGame(signpost.gameId, (result) => {
+                    if (result && result.success) {
+                        console.log(`[路标] ${signpost.name} 完成！`);
+                        // 乘风采药成功 → 推进主线任务"一盏安身灯"采药目标
+                        if (signpost.gameId === 'herb_collect' && this.player && this.player.questSystem) {
+                            this.player.questSystem.updateQuestProgress('chapter1_main_2', 'collect_item', 'lingcao', 3);
+                        }
+                    }
+                });
+            }
+            return;
+        }
+
         // 尝试与NPC交互
         if (this.player.nearbyNPC) {
             this.startNPCInteraction(this.player.nearbyNPC);
+            return;
+        }
+
+        // 靠近可拾取物品 → 拾取
+        if (this.player.nearbyPickupItem && !this.player.nearbyPickupItem.isPickedUp) {
+            this.handlePickupItem(this.player.nearbyPickupItem);
             return;
         }
         
@@ -418,6 +631,26 @@ class Main {
         if (this.player.nearbyMonster) {
             this.startMonsterBattle(this.player.nearbyMonster);
             return;
+        }
+    }
+/**
+     * 处理拾取物品
+     * @param {PickupItem} pickupItem - 拾取物实例
+     */
+    handlePickupItem(pickupItem) {
+        if (!pickupItem || pickupItem.isPickedUp) return;
+        
+        const success = pickupItem.pickup(
+            this.player.questItemSystem,
+            this.player.questSystem
+        );
+        
+        if (success) {
+            console.log(`[Main] 拾取物品: ${pickupItem.name}`);
+            // 从地图中移除已拾取的物品
+            if (this.currentMap && this.currentMap.removePickupItem) {
+                this.currentMap.removePickupItem(pickupItem.id);
+            }
         }
     }
 
@@ -457,6 +690,9 @@ class Main {
             };
             this.camera.setBounds(mapBounds.minX, mapBounds.minY, mapBounds.maxX, mapBounds.maxY);
             this.camera.setTarget(this.player);
+
+            // 创建新地图的任务道具（暂存的任务道具在对应任务激活时创建）
+            this.createPickupItemsFromConfig(targetMap);
         } finally {
             this.player.isInteracting = false;
             this.inputManager.setMovementBlocked(false);
@@ -475,8 +711,28 @@ class Main {
         // 面向NPC
         npc.faceTarget(this.player.position);
         
+        // ===== 清空上一对话缓存，防止跨NPC消息残留 =====
+        this.dialogBox.dialogueLines = [];
+        this.dialogBox.currentText = '';
+        this.dialogBox.displayedText = '';
+        this.dialogBox.currentSpeakerName = '';
+        this.dialogBox.isTyping = false;
+        this.dialogBox.currentLineIndex = 0;
+        
+        // 根据任务进度选择对话ID
+        const dialogueId = this.getDialogueForNPC(npc);
+
+        // ===== 推进 talk_to 任务目标（在 getDialogueForNPC 之后执行） =====
+        // 与 NPC 对话时，自动推进所有 active 任务中 type='talk_to' 且 target=该NPC 的目标
+        // 必须在 getDialogueForNPC 之后执行，以免影响当前对话选择（如 talk_to 未完成时显示初次教学）
+        if (this.player && this.player.questSystem) {
+            for (const [questId] of this.player.questSystem.getActiveQuests()) {
+                this.player.questSystem.updateQuestProgress(questId, 'talk_to', npc.id);
+            }
+        }
+
         // 开始对话
-        npc.startDialogue(this.player);
+        npc.startDialogue(this.player, dialogueId);
         
         // 设置对话框
         this.dialogBox.show();
@@ -494,6 +750,14 @@ class Main {
             this.advanceDialogue(npc);
         };
 
+        // 设置 NPC 的任务发布回调
+        npc.onAssignQuest = (questId) => {
+            const success = this.player.questSystem.acceptQuest(questId);
+            if (!success) {
+                console.warn(`[Main] 任务 ${questId} 接受失败（前置条件未满足或已接受）`);
+            }
+        };
+
         // 设置 NPC 的商店回调
         npc.onOpenShop = () => {
             if (this.shop) {
@@ -501,6 +765,179 @@ class Main {
                 this.dialogBox.hide();
             }
         };
+
+        // ===== 设置对话结束回调：处理 on_complete =====
+        npc.dialogueSystem.onDialogueEnd = () => {
+            this.handleDialogueComplete(npc);
+        };
+
+        // ===== 设置训练回调：处理 start_basic_training 动作 =====
+        npc.onStartTraining = () => {
+            this.handleStartTraining(npc);
+        };
+
+        // ===== 设置定息引气回调：处理 start_breath_heal_sequence 动作 =====
+        npc.onBreathHeal = () => {
+            this.startBreathHealSequence(npc);
+        };
+    }
+
+    /**
+     * 根据玩家任务进度获取 NPC 当前应显示的对话 ID
+     * @param {NPC} npc
+     * @returns {string|null}
+     */
+    getDialogueForNPC(npc) {
+        try {
+            if (window.Chapter1Config && this.player && this.player.questSystem) {
+                const dialogueId = Chapter1Config.getDialogueForNPC(npc.id, this.player.questSystem, this.player.questItemSystem);
+                if (dialogueId) {
+                    console.log(`[Main] NPC ${npc.id} → 对话: ${dialogueId}`);
+                    return dialogueId;
+                }
+            }
+        } catch (e) {
+            console.warn('[Main] getDialogueForNPC 错误:', e);
+        }
+        return null;
+    }
+
+    /**
+     * 处理对话结束时的 on_complete 回调
+     * @param {NPC} npc
+     */
+    handleDialogueComplete(npc) {
+        const onCompleteList = npc.dialogueSystem.getCurrentOnComplete();
+        if (!onCompleteList || onCompleteList.length === 0) return;
+        
+        console.log(`[Main] 对话结束，处理 on_complete:`, onCompleteList);
+        
+        for (const action of onCompleteList) {
+            switch (action) {
+                case 'teach_basic_skills':
+                    // 教学基本技能 + 启动训练场景（在中央广场放置训练目标）
+                    console.log('[Main] 传授基础技能: 灵息弹、护体术，启动训练');
+                    if (this.trainingManager && !this.trainingManager.isActive) {
+                        this.trainingManager.startBasicTraining();
+                        this.addGameNotification('前往中央广场完成基础训练！');
+                    }
+                    break;
+                    
+                case 'complete_quest_chapter1_main_1':
+                    // 任务完成时的交付对话，任务已完成，无需额外操作
+                    console.log('[Main] 主线一交付对话结束');
+                    break;
+                    
+                default:
+                    // 支持 on_complete 中写 accept_quest_xxx / start_quest_xxx
+                    if (action.startsWith('accept_quest_') || action.startsWith('start_quest_')) {
+                        const questId = action.replace(/^(accept_quest_|start_quest_)/, '');
+                        if (this.player && this.player.questSystem) {
+                            this.player.questSystem.acceptQuest(questId);
+                        }
+                    } else {
+                        console.warn(`[Main] 未处理的 on_complete 动作: ${action}`);
+                    }
+                    break;
+            }
+        }
+    }
+
+    /**
+     * 处理基础训练开始
+     * @param {NPC} npc - 训练导师 NPC
+     */
+    handleStartTraining(npc) {
+        console.log('[Main] 开始基础训练');
+        
+        // 启动训练场景（在中央广场放置训练目标）
+        if (this.trainingManager && !this.trainingManager.isActive) {
+            this.trainingManager.startBasicTraining();
+            this.addGameNotification('前往中央广场完成基础训练！');
+        } else if (this.trainingManager && this.trainingManager.isActive) {
+            this.addGameNotification('训练目标已放置，前往中央广场完成！');
+        }
+        // 注意：不在此处 endNPCInteraction，由 DialogueSystem.selectOption 中的对话结束逻辑自动处理
+    }
+
+    /**
+     * 定息引气：阿禾为阿砚疗伤的动画序列
+     * - 对话结束后播放，通过 setTimeout(0) 让 endNPCInteraction 先执行完毕再重新锁定输入
+     * - 阿禾向左转，循环播放 heal 动画5秒
+     * - 5秒后阿禾恢复朝下 idle
+     * - 再过2秒（共7秒）阿砚切换为站立 idle
+     * - 期间玩家操作被禁止
+     * @param {NPC} npc - 阿禾 NPC
+     */
+    startBreathHealSequence(npc) {
+        console.log('[Main] 开始定息引气序列');
+
+        // 让当前对话结束流程（endNPCInteraction）先执行完毕，再重新锁定输入
+        setTimeout(() => {
+            // 锁定玩家操作
+            this.player.isInteracting = true;
+            this.inputManager.setMovementBlocked(true);
+
+            const map = this.currentMap;
+            if (!map) return;
+
+            const ahe = map.npcs.get('ahe');
+            const ayan = map.npcs.get('ayan');
+            if (!ahe || !ayan) return;
+
+            // 1. 锁定阿禾动画（阻止 updateAnimation 覆盖），向左转，播放 heal 循环5秒
+            ahe.animationOverridden = true;
+            ahe.facing = 'left';
+            ahe.animationManager.setDirection('left');
+            if (ahe.animationManager.hasAnimation('heal')) {
+                ahe.setAnimation('heal', { loop: true });
+                console.log('[Main] 阿禾开始治疗动画（5秒）');
+            } else {
+                console.warn('[Main] Ahe 没有 heal 动画');
+            }
+
+            // 2. 5秒后：阿禾恢复朝下 idle，解锁动画
+            setTimeout(() => {
+                ahe.animationOverridden = false;
+                ahe.facing = 'down';
+                ahe.setIdleAnimation();
+                console.log('[Main] 阿禾治疗动画结束');
+
+                // 3. 再过2秒后（总共7秒）：锁定阿砚动画，切换为站立 idle（持续保持，不被 updateAnimation 覆盖）
+                setTimeout(() => {
+                    ayan.animationOverridden = true;
+                    if (ayan.animationManager.hasAnimation('stand_idle')) {
+                        ayan.setAnimation('stand_idle', { loop: true });
+                        ayan.setNpcState('healed', true);
+                        console.log('[Main] 阿砚被治愈，切换为站立动画');
+                    }
+
+                    // 4. 推进定息引气任务目标（complete_minigame）
+                    if (this.player && this.player.questSystem) {
+                        this.player.questSystem.updateQuestProgress('chapter1_main_2', 'complete_minigame', 'breath_control', 1);
+                        console.log('[Main] 定息引气任务目标已完成');
+                    }
+
+                    // 5. 解除玩家操作锁定
+                    this.player.isInteracting = false;
+                    this.inputManager.setMovementBlocked(false);
+                    console.log('[Main] 定息引气序列完成，恢复玩家操作');
+                }, 2000);
+            }, 5000);
+        }, 0);
+    }
+
+    /**
+     * 显示游戏内通知
+     * @param {string} message - 通知文本
+     */
+    addGameNotification(message) {
+        console.log(`[通知] ${message}`);
+        // 后续可扩展为屏幕上方淡入淡出的通知 UI
+        // 目前先打印日志，如果有 notificationManager 则使用
+        if (this.notificationManager && typeof this.notificationManager.addNotification === 'function') {
+            this.notificationManager.addNotification(message);
+        }
     }
 
     /**
@@ -609,6 +1046,14 @@ class Main {
      */
     endNPCInteraction(npc) {
         console.log('[调试] endNPCInteraction 被调用');
+        // ===== 清除对话框残留文字，防止下一NPC对话闪烁 =====
+        this.dialogBox.dialogueLines = [];
+        this.dialogBox.currentText = '';
+        this.dialogBox.displayedText = '';
+        this.dialogBox.currentSpeakerName = '';
+        this.dialogBox.isTyping = false;
+        this.dialogBox.currentLineIndex = 0;
+        this.dialogBox.onAdvance = null; // 清除回调引用
         this.dialogBox.hide();
         this.player.isInteracting = false;
         this.inputManager.setMovementBlocked(false);
@@ -665,8 +1110,16 @@ class Main {
                 'player.sanxiu_dead',
                 'npc.ahe_idle',
                 'npc.ahe_walk',
+                'npc.ahe_heal',
                 'npc.qibo_idle',
                 'npc.qibo_walk',
+                'npc.liushen_idle',
+                'npc.liushen_walk',
+                'npc.ayan_idle',
+                'npc.ayan_stand_idle',
+                'npc.ayan_walk',
+                'npc.zhoushu_idle',
+                'npc.zhoushu_walk',
                 'monsters.fenglang_idle',
                 'monsters.fenglang_attack',
                 'monsters.fenglang_hurt',
@@ -680,6 +1133,20 @@ class Main {
                 'ui.dialog_box',
                 'ui.task_panel',
                 'ui.button_normal',
+                // 任务物品图标
+                'questItems.guixiang_pai',
+                'questItems.hundeng',
+                'questItems.yisha',
+                'questItems.yunye_canye',
+                'questItems.mingce',
+                'questItems.zhenfeng_heipian',
+                'questItems.lingcao',
+                // 小游戏资源（全部预加载，确保小游戏实例化时数据立即可用）
+                'miniGame.caoyao_collision',
+                'miniGame.caoyao_bg',
+                'miniGame.caoyao_wind',
+                'miniGame.caoyao_herb',
+                'player.sanxiu_fly',
             ],
             audio: [
                 'bgm.main_menu',
@@ -717,7 +1184,7 @@ class Main {
      */
     createPlayer() {
         this.player = new Player({
-            position: { x: 320, y: 320 },
+            position: { x: 448, y: 1376 },
             playerData: {
                 realm: 'lianqi',
                 stage: '初期',
@@ -741,6 +1208,11 @@ class Main {
         this.player.onAttack = (attackData) => {
             // 处理玩家攻击
             this.battleSystem.checkPlayerAttacks();
+        };
+        
+        // 任务物品系统回调：当任务物品变更时更新任务进度
+        this.player.questItemSystem.onItemChanged = (itemId, count) => {
+            console.log(`[任务物品] ${itemId} 数量变更为 ${count}`);
         };
         
         // 设置任务系统引用
@@ -769,7 +1241,13 @@ class Main {
         this.currentMap = gameMap;
         gameMap.setPlayer(this.player);
         gameMap.activate();
-        
+
+        // 从地图配置创建可拾取物品
+        this.createPickupItemsFromConfig(gameMap);
+
+        // 根据任务状态控制路标可见性
+        this.updateSignpostQuestGates(gameMap);
+
         // 设置摄像机边界
         const mapBounds = {
             minX: 0,
@@ -785,6 +1263,82 @@ class Main {
         this.gameLoop.setCamera(this.camera);
         
         console.log(`初始地图加载完成: ${gameMap.name}`);
+    }
+
+    /**
+     * 遍历当前地图的所有路标，根据任务状态控制可见性
+     * @param {GameMap} gameMap - 地图实例
+     */
+    updateSignpostQuestGates(gameMap) {
+        if (!gameMap || !gameMap.signposts || !this.player || !this.player.questSystem) return;
+        for (const [, signpost] of gameMap.signposts) {
+            signpost.updateQuestGate(this.player.questSystem);
+        }
+    }
+
+    /**
+     * 从地图配置创建可拾取物品实例
+     * @param {GameMap} gameMap - 地图实例
+     */
+    createPickupItemsFromConfig(gameMap) {
+        const mapConfig = gameMap.mapConfig;
+        if (!mapConfig || !mapConfig.pickupItems) return;
+
+        const mapId = gameMap.mapId || (gameMap.mapConfig && gameMap.mapConfig.id);
+
+        for (const key in mapConfig.pickupItems) {
+            const config = mapConfig.pickupItems[key];
+            
+            // ===== 仅当任务需要时创建可拾取物品 =====
+            // 条件：任务尚未完成，且关联的 find_item 目标尚未达成
+            // 这样在任务未接取时物品可见，任务完成后自动消失
+            if (config.questId && this.player && this.player.questSystem) {
+                const qs = this.player.questSystem;
+                // 任务已完成 → 不创建
+                if (qs.isQuestCompleted(config.questId)) {
+                    console.log(`[Main] 跳过拾取物 ${config.name}：任务 ${config.questId} 已完成`);
+                    continue;
+                }
+                // 任务未接取（LOCKED）→ 暂存，等任务激活时再创建
+                const questState = qs.getQuestState(config.questId);
+                if (!questState || questState.state === 'locked') {
+                    if (!this.pendingQuestPickups[config.questId]) {
+                        this.pendingQuestPickups[config.questId] = [];
+                    }
+                    this.pendingQuestPickups[config.questId].push({ config, mapId });
+                    console.log(`[Main] 暂存拾取物 ${config.name}：等待任务 ${config.questId} 激活`);
+                    continue;
+                }
+                // 任务进行中，但目标已达成 → 不创建
+                if (questState.state === 'active') {
+                    const findObj = (questState.objectives || []).find(obj => 
+                        obj.type === config.objectiveType && obj.target === config.itemId);
+                    if (findObj && findObj.completed) {
+                        console.log(`[Main] 跳过拾取物 ${config.name}：目标已完成`);
+                        continue;
+                    }
+                }
+            }
+            
+            // 获取物品图片（可选）
+            const image = this.resourceManager.getCachedImage(`questItems.${config.itemId}`);
+
+            const pickupItem = new PickupItem({
+                id: config.id,
+                itemId: config.itemId,
+                name: config.name,
+                position: { ...config.position },
+                count: config.count || 1,
+                questId: config.questId || null,
+                objectiveType: config.objectiveType || 'find_item',
+                promptText: config.promptText || '按 E 拾取',
+                image: image,
+                radius: config.radius || 40,
+            });
+
+            gameMap.addPickupItem(pickupItem);
+            console.log(`[Main] 创建拾取物: ${config.name} (${config.itemId}) 于 (${config.position.x}, ${config.position.y})`);
+        }
     }
 
     /**
@@ -885,8 +1439,8 @@ class Main {
                 );
             });
             
-            // 点击推进对话
-            if (input.mouseClicked) {
+            // 点击或按 J 键推进对话
+            if (input.mouseClicked || input.pressedKeys['j']) {
                 this.dialogBox.advance();
             }
         }
@@ -896,15 +1450,38 @@ class Main {
             this.battleSystem.update(deltaTime);
         }
         
-        // 检查交互键
-        if (input.pressedKeys['e'] && !this.dialogBox.isVisible && !this.mapTeleport.isVisible) {
-            this.handleInteraction();
-        }
-        
-        // 检查攻击键
-        if (input.pressedKeys['j'] || input.pressedKeys[' ']) {
-            if (this.player && !this.player.isInBattle) {
-                this.player.performAttack();
+        // 任务栏打开 → 忽略所有游戏操作
+        if (!this.questUI.isVisible && !this.dialogBox.isVisible) {
+            // 检查交互键
+            if (input.pressedKeys['e'] && !this.mapTeleport.isVisible) {
+                this.handleInteraction();
+            }
+            
+            // 更新训练管理器（放置训练目标时处理玩家动作检测）
+            if (this.trainingManager && this.trainingManager.isActive) {
+                this.trainingManager.update(deltaTime, this.player, input);
+            }
+
+            // 检查技能键（K=灵息弹, L=护体术, Shift=闪避）
+            if (!this.player.isInBattle) {
+                if (input.pressedKeys['k']) {
+                    console.log('[Main] 按 K - 尝试使用灵息弹');
+                }
+                if (input.pressedKeys['l']) {
+                    console.log('[Main] 按 L - 尝试使用护体术');
+                }
+                if (input.pressedKeys['Shift']) {
+                    if (!this.player.isDodging && this.player.performDodge) {
+                        this.player.performDodge();
+                    }
+                }
+            }
+
+            // 检查攻击键
+            if (input.pressedKeys['j'] || input.pressedKeys[' ']) {
+                if (this.player && !this.player.isInBattle) {
+                    this.player.performAttack();
+                }
             }
         }
     }
@@ -1006,14 +1583,38 @@ class Main {
             this.dialogBox.render(ctx);
         }
         
-        // 渲染任务UI
-        if (this.questUI.isVisible) {
-            this.questUI.render(ctx);
-        }
-        
         // 渲染地图传送
         if (this.mapTeleport.isVisible) {
             this.mapTeleport.render(ctx);
+        }
+
+        // 渲染拾取物提示（玩家附近有可拾取物品时显示）
+        if (this.player && this.player.nearbyPickupItem && !this.player.nearbyPickupItem.isPickedUp) {
+            this.player.nearbyPickupItem.renderPrompt(ctx, this.camera);
+        }
+
+        // 渲染 NPC 交互提示（靠近 NPC 时显示"按 E 对话"）
+        // 对话中或正在交互时不再显示提示
+        if (this.player && this.player.nearbyNPC && this.player.nearbyNPC.canInteract
+            && !this.dialogBox.isVisible && !this.player.isInteracting) {
+            this.player.nearbyNPC.renderPrompt(ctx, this.camera);
+        }
+
+        // 渲染路标提示（靠近路标时显示"按 E 键…"）
+        if (this.player && this.player.nearbySignpost && this.player.nearbySignpost.isActive
+            && !this.dialogBox.isVisible && !this.player.isInteracting) {
+            this.player.nearbySignpost.renderPrompt(ctx, this.camera);
+        }
+
+        // 渲染训练目标（地面标记 + 提示）
+        if (this.trainingManager && this.trainingManager.isActive) {
+            this.trainingManager.render(ctx, this.camera);
+            this.trainingManager.renderPrompt(ctx, this.camera);
+        }
+
+        // 任务UI渲染在最后（最顶层，不被其他UI覆盖）
+        if (this.questUI.isVisible) {
+            this.questUI.render(ctx);
         }
     }
 
@@ -1191,6 +1792,10 @@ class Main {
      * @param {Function} callback - 结束回调 (result) => void
      */
     startMiniGame(gameId, callback) {
+        // 保存进入小游戏时的玩家大地图坐标（结束时恢复）
+        this._savedPlayerX = this.player.position.x;
+        this._savedPlayerY = this.player.position.y;
+        
         // 保存回调
         this.miniGameCallback = callback || null;
         
@@ -1210,6 +1815,12 @@ class Main {
     handleMiniGameEnd(result) {
         // 切换回之前的场景
         this.sceneManager.switchScene('gameWorld');
+        
+        // 恢复进入小游戏前的玩家大地图坐标
+        if (this._savedPlayerX !== undefined) {
+            this.player.position.x = this._savedPlayerX;
+            this.player.position.y = this._savedPlayerY;
+        }
         
         // 执行回调
         if (this.miniGameCallback) {

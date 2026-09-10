@@ -84,6 +84,7 @@ class ResourceManager {
                     // 散修（练气期，未选职业）
                     sanxiu_idle: 'assets/images/player/sanxiu/idle.png',
                     sanxiu_walk: 'assets/images/player/sanxiu/walk.png',
+                    sanxiu_fly: 'assets/images/player/sanxiu/fly.png',
                     sanxiu_attack: 'assets/images/player/sanxiu/attack.png',
                     sanxiu_skill: 'assets/images/player/sanxiu/skill.png',
                     sanxiu_hurt: 'assets/images/player/sanxiu/hurt.png',
@@ -140,6 +141,15 @@ class ResourceManager {
                     ahe_walk: 'assets/images/npc/ahe/walk.png',
                     qibo_idle: 'assets/images/npc/qibo/idle.png',
                     qibo_walk: 'assets/images/npc/qibo/walk.png',
+                    ahe_heal: 'assets/images/npc/ahe/heal.png',
+                    // 第一章NPC：柳婶、阿砚、周叔
+                    liushen_idle: 'assets/images/npc/liushen/idle.png',
+                    liushen_walk: 'assets/images/npc/liushen/walk.png',
+                    ayan_idle: 'assets/images/npc/ayan/sit_idle.png',
+                    ayan_walk: 'assets/images/npc/ayan/walk.png',
+                    ayan_stand_idle: 'assets/images/npc/ayan/stand_idle.png',
+                    zhoushu_idle: 'assets/images/npc/zhoushu/idle.png',
+                    zhoushu_walk: 'assets/images/npc/zhoushu/walk.png',
                     luzhou_idle: 'assets/images/npc/luzhou/idle.png',
                     luzhou_walk: 'assets/images/npc/luzhou/walk.png',
                     jiangpo_idle: 'assets/images/npc/jiangpo/idle.png',
@@ -194,7 +204,7 @@ class ResourceManager {
                     boss_wuxiang_hurt: 'assets/images/monsters/boss_wuxiang/hurt.png',
                     boss_wuxiang_dead: 'assets/images/monsters/boss_wuxiang/dead.png',
                     
-                    // 最终Boss - 太玄道君
+                    // Boss - 太玄道君
                     boss_taixuan_walk: 'assets/images/monsters/boss_taixuan/walk.png',
                     boss_taixuan_idle: 'assets/images/monsters/boss_taixuan/idle.png',
                     boss_taixuan_attack: 'assets/images/monsters/boss_taixuan/attack.png',
@@ -203,6 +213,17 @@ class ResourceManager {
                     boss_taixuan_skill3: 'assets/images/monsters/boss_taixuan/skill3.png',
                     boss_taixuan_hurt: 'assets/images/monsters/boss_taixuan/hurt.png',
                     boss_taixuan_dead: 'assets/images/monsters/boss_taixuan/dead.png',
+                },
+                
+                // === 任务物品图标 ===
+                questItems: {
+                    guixiang_pai: 'assets/images/quest_items/guixiang_pai.png',
+                    hundeng: 'assets/images/quest_items/hundeng.png',
+                    yisha: 'assets/images/quest_items/yisha.png',
+                    yunye_canye: 'assets/images/quest_items/yunye_canye.png',
+                    mingce: 'assets/images/quest_items/mingce.png',
+                    zhenfeng_heipian: 'assets/images/quest_items/zhenfeng_heipian.png',
+                    lingcao: 'assets/images/quest_items/lingcao.png',
                 },
                 
                 // === 技能特效 ===
@@ -252,12 +273,16 @@ class ResourceManager {
 
                 },
                 
+                // === 路标图标 ===
+                signposts: {
+                    herb_collect: 'assets/images/signposts/herb_collect.png',
+                },
                 // === 小游戏相关 ===
                 miniGame: {
                     // 乘风采药
                     caoyao_bg: 'assets/images/minigame/caoyao/bg.png',
+                    caoyao_collision: 'assets/images/minigame/caoyao/collision.png',
                     caoyao_wind: 'assets/images/minigame/caoyao/wind.png',
-                    caoyao_player: 'assets/images/minigame/caoyao/player.png',
                     caoyao_herb: 'assets/images/minigame/caoyao/herb.png',
                     // 定息引气
                     yinqi_bg: 'assets/images/minigame/yinqi/bg.png',
