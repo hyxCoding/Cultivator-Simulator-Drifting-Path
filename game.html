@@ -1,0 +1,422 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>修仙者模拟器：飘途</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background-color: #0a0a14;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        
+        #gameContainer {
+            position: relative;
+            border: 2px solid #3a3a5a;
+            border-radius: 8px;
+            box-shadow: 0 0 40px rgba(100, 100, 200, 0.3);
+            overflow: hidden;
+        }
+        
+        #gameCanvas {
+            display: block;
+            background-color: #000000;
+            width: 1280px;
+            height: 720px;
+            cursor: default;
+        }
+        
+        #loadingOverlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: #0a0a14;
+            z-index: 10;
+            transition: opacity 0.5s ease;
+        }
+        
+        #loadingOverlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        
+        #gameTitle {
+            color: #FFD700;
+            font-size: 36px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            letter-spacing: 4px;
+            text-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+        }
+        
+        #gameSubtitle {
+            color: #8888aa;
+            font-size: 16px;
+            margin-bottom: 40px;
+            letter-spacing: 2px;
+        }
+        
+        #loadingText {
+            color: #cccccc;
+            font-size: 16px;
+            margin-bottom: 15px;
+        }
+        
+        #loadingProgress {
+            width: 300px;
+            height: 8px;
+            background-color: #1a1a2e;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        
+        #loadingProgressBar {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, #FFD700, #FFA500);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+        
+        #errorMessage {
+            color: #ff4444;
+            font-size: 14px;
+            margin-top: 20px;
+            display: none;
+            text-align: center;
+            max-width: 500px;
+            line-height: 1.6;
+            padding: 10px 20px;
+            background-color: rgba(255, 0, 0, 0.1);
+            border: 1px solid #ff4444;
+            border-radius: 5px;
+        }
+        
+        #errorMessage.visible {
+            display: block;
+        }
+        
+        #savePrompt {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.9);
+            border: 2px solid #FFD700;
+            border-radius: 10px;
+            padding: 30px;
+            text-align: center;
+            z-index: 20;
+            display: none;
+        }
+        
+        #savePrompt.visible {
+            display: block;
+        }
+        
+        #savePromptTitle {
+            color: #FFD700;
+            font-size: 22px;
+            margin-bottom: 15px;
+        }
+        
+        #savePromptText {
+            color: #cccccc;
+            font-size: 16px;
+            margin-bottom: 25px;
+        }
+        
+        .savePromptButton {
+            display: inline-block;
+            padding: 10px 30px;
+            margin: 0 10px;
+            font-size: 16px;
+            cursor: pointer;
+            border: 2px solid #FFD700;
+            border-radius: 5px;
+            background-color: transparent;
+            color: #FFD700;
+            transition: all 0.3s;
+            font-family: 'Microsoft YaHei', sans-serif;
+        }
+        
+        .savePromptButton:hover {
+            background-color: #FFD700;
+            color: #000000;
+        }
+        
+        .savePromptButton.secondary {
+            border-color: #666666;
+            color: #666666;
+        }
+        
+        .savePromptButton.secondary:hover {
+            background-color: #666666;
+            color: #ffffff;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="1280" height="720"></canvas>
+        
+        <!-- 加载界面 -->
+        <div id="loadingOverlay">
+            <div id="gameTitle">修仙者模拟器</div>
+            <div id="gameSubtitle">飘 途</div>
+            <div id="loadingText">正在初始化...</div>
+            <div id="loadingProgress">
+                <div id="loadingProgressBar"></div>
+            </div>
+            <div id="errorMessage"></div>
+        </div>
+        
+        <!-- 存档提示弹窗 -->
+        <div id="savePrompt">
+            <div id="savePromptTitle">检测到存档</div>
+            <div id="savePromptText">是否读取上次的游戏进度？</div>
+            <div>
+                <button class="savePromptButton" id="btnLoadSave">读取存档</button>
+                <button class="savePromptButton secondary" id="btnNewGame">新游戏</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- ========== 按依赖顺序引入所有JavaScript文件 ========== -->
+    
+    <!-- 第1层：基础类 -->
+    <script src="js/ResourceManager.js"></script>
+    <script src="js/GameConfig.js"></script>
+    <script src="js/CollisionDetector.js"></script>
+    
+    <!-- 第2层：地图相关 -->
+    <script src="js/TileSystem.js"></script>
+    <script src="js/AStar.js"></script>
+    <script src="js/GameMap.js"></script>
+    <script src="js/MapManager.js"></script>
+    
+    <!-- 第3层：动画相关 -->
+    <script src="js/Animation.js"></script>
+    <script src="js/AnimationManager.js"></script>
+    <script src="js/Camera.js"></script>
+    
+    <!-- 第4层：游戏循环 -->
+    <script src="js/GameLoop.js"></script>
+    
+    <!-- 第5层：场景 -->
+    <script src="js/Scene.js"></script>
+    <script src="js/SceneManager.js"></script>
+    
+    <!-- 第6层：玩家数据 -->
+    <script src="js/PlayerData.js"></script>
+    <script src="js/Inventory.js"></script>
+    <script src="js/ProfessionSystem.js"></script>
+    <script src="js/QuestSystem.js"></script>
+    
+    <!-- 第7层：玩家 -->
+    <script src="js/Player.js"></script>
+    
+    <!-- 第8层：NPC相关 -->
+    <script src="js/NPCStateMachine.js"></script>
+    <script src="js/DialogueSystem.js"></script>
+    <script src="js/NPC.js"></script>
+    
+    <!-- 第9层：怪物 -->
+    <script src="js/Monster.js"></script>
+    <script src="js/Boss.js"></script>
+    
+    <!-- 第10层：输入和UI -->
+    <script src="js/InputManager.js"></script>
+    <script src="js/UIButton.js"></script>
+    <script src="js/DialogBox.js"></script>
+    
+    <!-- 第10.5层：商店系统 -->
+    <script src="js/Shop.js"></script>
+    
+    <!-- 第11层：战斗系统 -->
+    <script src="js/BattleSystem.js"></script>
+    
+    <!-- 第12层：小游戏 -->
+    <script src="js/MiniGame.js"></script>
+    <script src="js/HerbCollectMiniGame.js"></script>
+    <script src="js/BreathControlMiniGame.js"></script>
+    <script src="js/BoatNavigationMiniGame.js"></script>
+    <script src="js/MemorySortMiniGame.js"></script>
+    <script src="js/MiniGameManager.js"></script>
+    
+    <!-- 第13层：地图传送 -->
+    <script src="js/MapAreaButton.js"></script>
+    <script src="js/MapTeleport.js"></script>
+    <script src="js/TeleportArray.js"></script>
+    
+    <!-- 第14层：任务UI -->
+    <script src="js/QuestUI.js"></script>
+    
+    <!-- 第15层：存档 -->
+    <script src="js/SaveManager.js"></script>
+    <script src="js/GameDataManager.js"></script>
+    
+    <!-- 第16层：场景类 -->
+    <script src="js/MainMenuScene.js"></script>
+    <script src="js/GameWorldScene.js"></script>
+    <script src="js/BattleScene.js"></script>
+    <script src="js/MiniGameScene.js"></script>
+    
+    <!-- 第17层：主程序 -->
+    <script src="js/Main.js"></script>
+    
+    <!-- ========== 游戏启动 ========== -->
+    <script>
+        (function() {
+            let mainInstance = null; // 保存Main实例，供存档弹窗使用
+            
+            // 获取DOM元素
+            const loadingOverlay = document.getElementById('loadingOverlay');
+            const loadingText = document.getElementById('loadingText');
+            const progressBar = document.getElementById('loadingProgressBar');
+            const errorMessage = document.getElementById('errorMessage');
+            const savePrompt = document.getElementById('savePrompt');
+            const btnLoadSave = document.getElementById('btnLoadSave');
+            const btnNewGame = document.getElementById('btnNewGame');
+            
+            /**
+             * 更新加载进度
+             */
+            function updateLoading(text, progress) {
+                loadingText.textContent = text;
+                progressBar.style.width = progress + '%';
+            }
+            
+            /**
+             * 显示错误
+             */
+            function showError(message) {
+                loadingText.textContent = '游戏加载失败';
+                loadingText.style.color = '#ff4444';
+                errorMessage.textContent = message;
+                errorMessage.classList.add('visible');
+                progressBar.style.width = '0%';
+            }
+            
+            /**
+             * 隐藏加载界面
+             */
+            function hideLoading() {
+                loadingOverlay.classList.add('hidden');
+                setTimeout(() => {
+                    loadingOverlay.style.display = 'none';
+                }, 500);
+            }
+            
+            /**
+             * 显示存档提示
+             */
+            function showSavePrompt() {
+                savePrompt.classList.add('visible');
+            }
+            
+            /**
+             * 隐藏存档提示
+             */
+            function hideSavePrompt() {
+                savePrompt.classList.remove('visible');
+            }
+            
+            /**
+             * 启动游戏（不读取存档）
+             */
+            function startNewGame() {
+                hideSavePrompt();
+                hideLoading();
+                mainInstance.start();
+                console.log('[游戏] 新游戏开始');
+            }
+            
+            /**
+             * 启动游戏（读取存档）
+             */
+            function startWithSave() {
+                hideSavePrompt();
+                if (mainInstance && mainInstance.saveManager) {
+                    mainInstance.load();
+                }
+                hideLoading();
+                mainInstance.start();
+                console.log('[游戏] 读取存档开始');
+            }
+            
+            // 绑定存档弹窗按钮
+            btnLoadSave.addEventListener('click', startWithSave);
+            btnNewGame.addEventListener('click', startNewGame);
+            
+            /**
+             * 游戏启动入口
+             */
+            async function startGame() {
+                try {
+                    updateLoading('正在初始化游戏...', 10);
+                    
+                    // 创建游戏实例
+                    mainInstance = new Main();
+                    
+                    updateLoading('正在加载资源...', 40);
+                    
+                    // 初始化游戏
+                    const success = await mainInstance.init('gameCanvas');
+                    
+                    if (!success) {
+                        throw new Error('游戏初始化失败');
+                    }
+                    
+                    updateLoading('准备就绪...', 100);
+                    
+                    // 检查是否有存档
+                    if (mainInstance.saveManager && mainInstance.saveManager.hasSave()) {
+                        // 显示存档提示，让玩家选择
+                        showSavePrompt();
+                    } else {
+                        // 无存档，直接开始
+                        hideLoading();
+                        mainInstance.start();
+                    }
+                    
+                } catch (error) {
+                    console.error('[游戏] 启动失败:', error);
+                    showError(error.message || '未知错误');
+                }
+            }
+            
+            // 页面加载完成后启动游戏
+            window.addEventListener('DOMContentLoaded', () => {
+                startGame().catch(error => {
+                    console.error('[游戏] 启动异常:', error);
+                    showError(error.message || '未知错误');
+                });
+            });
+            
+            // 导出Main实例（方便调试）
+            window.getMainInstance = () => mainInstance;
+        })();
+    </script>
+</body>
+</html>
