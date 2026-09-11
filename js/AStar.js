@@ -233,4 +233,181 @@ class AStar {
         // 检查是否为直线（45度或其他角度）
         return true; // 简化处理，实际使用时可加入障碍检测
     }
+
+    // ==================== 轴对齐寻路（大型怪物 / Boss 专用） ====================
+    // findPath 面向自由移动的 NPC：optimizePath 会把中间点合并成“斜线”，
+    // 对只允许上下左右移动的目标（如摄风山魈）不适用。
+    // 下面这套接口只返回四方向逐格路径，合并共线点时也仅做轴向可见性检查，
+    // 因此相邻路径点必定同行或同列，调用方可直接按轴推进。
+
+    /**
+     * 查找轴对齐路径（仅上下左右）
+     * @param {Object} start - 起点位置 {x, y}（世界坐标，像素）
+     * @param {Object} end - 终点位置 {x, y}（世界坐标，像素）
+     * @param {Array} grid - 可行走网格二维数组 [y][x]，true=可走
+     * @param {number} tileSize - 瓦片大小（像素）
+     * @returns {Array} 路径点列表 [{x, y}, ...]（世界坐标，瓦片中心）；无路径返回 []
+     */
+    static findAxisAlignedPath(start, end, grid, tileSize) {
+        const tilePath = this.searchAxisAlignedTilePath(start, end, grid, tileSize);
+        if (tilePath.length === 0) {
+            return [];
+        }
+
+        const simplified = this.simplifyAxisAlignedPath(tilePath, grid);
+        return simplified.map(tile => ({
+            x: tile.x * tileSize + tileSize / 2,
+            y: tile.y * tileSize + tileSize / 2,
+        }));
+    }
+
+    /**
+     * 轴对齐 A* 搜索（四方向，不做斜线合并）
+     * 复用 isWalkable / getNeighbors / heuristic / getNodeKey，仅保留最简 open/closed 主循环。
+     * @param {Object} start - 起点（世界坐标）
+     * @param {Object} end - 终点（世界坐标）
+     * @param {Array} grid - 可行走网格
+     * @param {number} tileSize - 瓦片大小
+     * @returns {Array} 逐格瓦片路径 [{x, y}, ...]（含起点与终点）；无路径返回 []
+     */
+    static searchAxisAlignedTilePath(start, end, grid, tileSize) {
+        const startTile = { x: Math.floor(start.x / tileSize), y: Math.floor(start.y / tileSize) };
+        const endTile = { x: Math.floor(end.x / tileSize), y: Math.floor(end.y / tileSize) };
+
+        if (!this.isWalkable(startTile.x, startTile.y, grid) ||
+            !this.isWalkable(endTile.x, endTile.y, grid)) {
+            return [];
+        }
+        if (startTile.x === endTile.x && startTile.y === endTile.y) {
+            return [];
+        }
+
+        const openList = [startTile];
+        const closedList = new Set();
+        const cameFrom = new Map();
+        const gScore = new Map([[this.getNodeKey(startTile), 0]]);
+        const fScore = new Map([[this.getNodeKey(startTile), this.heuristic(startTile, endTile)]]);
+        const endKey = this.getNodeKey(endTile);
+
+        while (openList.length > 0) {
+            // 取 fScore 最小节点
+            let bestIndex = 0;
+            let current = openList[0];
+            let currentKey = this.getNodeKey(current);
+            for (let i = 1; i < openList.length; i++) {
+                const key = this.getNodeKey(openList[i]);
+                if (fScore.get(key) < fScore.get(currentKey)) {
+                    bestIndex = i;
+                    current = openList[i];
+                    currentKey = key;
+                }
+            }
+
+            if (currentKey === endKey) {
+                return this.reconstructTilePath(cameFrom, current);
+            }
+
+            openList.splice(bestIndex, 1);
+            closedList.add(currentKey);
+
+            for (const neighbor of this.getNeighbors(current, grid)) {
+                const neighborKey = this.getNodeKey(neighbor);
+                if (closedList.has(neighborKey)) continue;
+
+                const tentativeG = gScore.get(currentKey) + 1;
+                const knownG = gScore.has(neighborKey) ? gScore.get(neighborKey) : Infinity;
+                const inOpenList = openList.some(node => this.getNodeKey(node) === neighborKey);
+
+                if (!inOpenList || tentativeG < knownG) {
+                    cameFrom.set(neighborKey, current);
+                    gScore.set(neighborKey, tentativeG);
+                    fScore.set(neighborKey, tentativeG + this.heuristic(neighbor, endTile));
+                    if (!inOpenList) {
+                        openList.push(neighbor);
+                    }
+                }
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * 重建逐格瓦片路径（不做拐点合并）
+     * @param {Map} cameFrom - 来源表
+     * @param {Object} current - 终点瓦片
+     * @returns {Array} 瓦片路径 [{x, y}, ...]（含起点与终点）
+     */
+    static reconstructTilePath(cameFrom, current) {
+        const tilePath = [current];
+        let currentKey = this.getNodeKey(current);
+
+        while (cameFrom.has(currentKey)) {
+            current = cameFrom.get(currentKey);
+            currentKey = this.getNodeKey(current);
+            tilePath.unshift(current);
+        }
+
+        return tilePath;
+    }
+
+    /**
+     * 合并轴对齐路径上的共线中间点
+     * 仅当两点同行（或同列）且中间格子全部可走时才合并，合并后依然轴对齐。
+     * @param {Array} tilePath - 逐格瓦片路径
+     * @param {Array} grid - 可行走网格
+     * @returns {Array} 合并后的瓦片路径
+     */
+    static simplifyAxisAlignedPath(tilePath, grid) {
+        if (!Array.isArray(tilePath) || tilePath.length <= 2) {
+            return Array.isArray(tilePath) ? tilePath : [];
+        }
+
+        const result = [tilePath[0]];
+        let index = 0;
+
+        while (index < tilePath.length - 1) {
+            let farthest = index + 1;
+
+            for (let i = tilePath.length - 1; i > index + 1; i--) {
+                if (this.isAxisAlignedClear(tilePath[index], tilePath[i], grid)) {
+                    farthest = i;
+                    break;
+                }
+            }
+
+            result.push(tilePath[farthest]);
+            index = farthest;
+        }
+
+        return result;
+    }
+
+    /**
+     * 检查两点是否同行/同列且中间格子全部可走（只走轴向，不判斜线）
+     * @param {Object} a - 瓦片坐标 {x, y}
+     * @param {Object} b - 瓦片坐标 {x, y}
+     * @param {Array} grid - 可行走网格
+     * @returns {boolean}
+     */
+    static isAxisAlignedClear(a, b, grid) {
+        if (a.x !== b.x && a.y !== b.y) {
+            return false;   // 非轴对齐，不合并
+        }
+
+        const stepX = Math.sign(b.x - a.x);
+        const stepY = Math.sign(b.y - a.y);
+        let x = a.x;
+        let y = a.y;
+
+        while (x !== b.x || y !== b.y) {
+            x += stepX;
+            y += stepY;
+            if (!this.isWalkable(x, y, grid)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
 }

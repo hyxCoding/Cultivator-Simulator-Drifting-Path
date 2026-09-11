@@ -185,6 +185,18 @@ class DialogueSystem {
                     this.npc.onBreathHeal();
                 }
                 break;
+            case 'start_wind_bridge_rescue':
+                // 风桥护送：周叔过桥后直接迁往获救地点（主线三）
+                if (this.npc.onWindBridgeRescue) {
+                    this.npc.onWindBridgeRescue();
+                }
+                break;
+            case 'start_foundation_trial':
+                // 筑基调息（章末）：禁键盘输入 → 主角朝下 → 背后播放筑基气场 5 秒 → 续接筑基成功对话
+                if (this.npc.onFoundationTrial) {
+                    this.npc.onFoundationTrial();
+                }
+                break;
             default:
                 if (action.startsWith('start_quest_') || action.startsWith('accept_quest_')) {
                     // 开始任务

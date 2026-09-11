@@ -3,8 +3,10 @@ class GameConfig {
     constructor() { if (GameConfig.instance) { return GameConfig.instance; } GameConfig.instance = this; this.initConfig(); }
     initConfig() {
         this.realms = {
+            // 初始（练气）：气血上限 100 / 灵息上限 50，建号时即为满值
             LIANQI: { id:'lianqi',name:'练气',stages:['初期','中期','后期','圆满'],maxExp:100,moveSpeed:200,maxHealth:100,maxMana:50 },
-            ZHUJI: { id:'zhuji',name:'筑基',stages:['初期','中期','后期','圆满'],maxExp:200,moveSpeed:220,maxHealth:150,maxMana:75 },
+            // 筑基：第一章章末「筑基调息」完成后进入 —— 气血上限 200 / 灵息上限 100，并即时回满
+            ZHUJI: { id:'zhuji',name:'筑基',stages:['初期','中期','后期','圆满'],maxExp:200,moveSpeed:220,maxHealth:200,maxMana:100 },
             JIEDAN: { id:'jiedan',name:'结丹',stages:['初期','中期','后期','圆满'],maxExp:400,moveSpeed:240,maxHealth:220,maxMana:100 },
             YUANYING: { id:'yuanying',name:'元婴',stages:['初期','中期','后期','圆满'],maxExp:800,moveSpeed:260,maxHealth:300,maxMana:150 },
             HUASHEN: { id:'huashen',name:'化神',stages:['初期'],maxExp:0,moveSpeed:300,maxHealth:500,maxMana:250 },
@@ -65,6 +67,12 @@ class GameConfig {
         this.recipes = {
             huiyuan_dan:{result:'huiyuan_dan',materials:[{itemId:'lingcao',count:2}],minigame:'konghuo_liandan'},
             huiling_dan:{result:'huiling_dan',materials:[{itemId:'lingcao',count:1},{itemId:'ninglu',count:1}],minigame:'konghuo_liandan'},
+        };
+        // ========== 战斗通用规则（全境界一致，与职业无关） ==========
+        this.combat = {
+            // 灵息（魔法值）自然恢复：每 interval 秒恢复 amount 点，上限自然封顶
+            // 说明：气血只有丹药 / 剧情回复，不做自然恢复；灵息恢复不看是否移动 / 普攻 / 闪避
+            manaRegen: { interval: 2, amount: 1 },
         };
         this.respecCost = { zhuji:600, jiedan:1200, yuanying:2400 };
         this.repeatableQuestRewards = { lianqi:50, zhuji:200, jiedan:400, yuanying:800 };

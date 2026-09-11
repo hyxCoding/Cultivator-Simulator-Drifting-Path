@@ -48,7 +48,8 @@ class InputManager {
             pause: ['escape'],
             confirm: ['enter'],
             cancel: ['backspace'],
-            miniGame: ['l'],
+            // 注：L 键已改为"闪避"（见 js/PlayerCombat.js），原 L 键小游戏入口已禁用
+            dodge: ['l'],
         };
         
         // ========== 回调 ==========

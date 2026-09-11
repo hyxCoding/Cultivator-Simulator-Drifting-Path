@@ -25,20 +25,27 @@ class GameMap {
         this.tileSize = mapConfig.tileSize || 32;
         this.mapWidth = mapConfig.mapWidth || 50;
         this.mapHeight = mapConfig.mapHeight || 40;
+        // 瓦片碰撞表：加载时从碰撞图生成（白色可通行 / 黑色不可通行）；
+        // mapConfig.collisionData 是同一张碰撞图的预生成结果，仅在读不到像素时兜底
+        // （见 TileSystem 说明）
         this.tileSystem = new TileSystem(
             this.tileSize,
             this.mapWidth,
             this.mapHeight,
-            this.collisionImage
+            this.collisionImage,
+            mapConfig.collisionData
         );
         
         // 实体容器（由 GameLoop 遍历更新，地图只负责存储）
         this.player = null;       // 玩家引用
         this.npcs = new Map();    // NPC实例 {id: npcInstance}
         this.monsters = new Map(); // 怪物实例 {id: monsterInstance}
+        this.arenaBoss = null;     // 战场 Boss 引用（摄风山魈，主线四）
+        this.arenaBossDefeated = false; // 战场 Boss 是否已被击败（击败后本图不再生成 Boss）
         this.teleporters = new Map(); // 传送法阵实例 {id: TeleportArray}
         this.pickupItems = new Map(); // 可拾取物品 {id: PickupItem}
         this.signposts = new Map();   // 路标 {id: Signpost}
+        this.windPiles = new Map();   // 任务门控调查点 {id: WindPile|LanternBox}（命名沿用最早的镇风桩实现）
         
         // 地图入口点
         this.entryPoint = mapConfig.entryPoint || { x: 0, y: 0 };
@@ -86,7 +93,14 @@ class GameMap {
         if (this.mapConfig.npcPositions) {
             for (const npcId in this.mapConfig.npcPositions) {
                 const npcPosition = this.mapConfig.npcPositions[npcId];
-                const worldPosition = this.tileToWorld(npcPosition.x, npcPosition.y);
+                // 优先使用 npcWorldPositions 中声明的精确世界坐标（像素）；
+                // 未声明时按 npcPositions 的瓦片坐标换算
+                const exactPosition = this.mapConfig.npcWorldPositions
+                    ? this.mapConfig.npcWorldPositions[npcId]
+                    : null;
+                const worldPosition = exactPosition
+                    ? { x: exactPosition.x, y: exactPosition.y }
+                    : this.tileToWorld(npcPosition.x, npcPosition.y);
                 
                 // 从 GameConfig 获取 NPC 完整配置（通过 ChapterLoader 注册的数据）
                 const gameConfig = GameConfig.getInstance();
@@ -144,6 +158,13 @@ class GameMap {
         if (this.mapConfig.bossPosition) {
             for (const bossKey in this.mapConfig.bossPosition) {
                 const bossPosition = this.mapConfig.bossPosition[bossKey];
+
+                // 摄风山魈（主线四战场）：使用专属 AI（行为树 + 轴对齐寻路 + 打断规则）
+                if (bossPosition.monsterId === 'boss_shanxiao' || bossPosition.ai === 'shanxiao') {
+                    this.spawnArenaBoss(bossKey, bossPosition);
+                    continue;
+                }
+
                 const worldPosition = this.tileToWorld(bossPosition.x, bossPosition.y);
 
                 const boss = new Boss({
@@ -159,10 +180,14 @@ class GameMap {
         }
 
         // 初始化传送法阵
+        // 坐标：position 为瓦片坐标（默认，按 tileToWorld 换算）；
+        //       worldPosition 为世界坐标（像素，优先，与 npcWorldPositions 约定一致）
         if (this.mapConfig.teleporters) {
             for (const teleportKey in this.mapConfig.teleporters) {
                 const teleportConfig = this.mapConfig.teleporters[teleportKey];
-                const worldPosition = this.tileToWorld(teleportConfig.position.x, teleportConfig.position.y);
+                const worldPosition = teleportConfig.worldPosition
+                    ? { x: teleportConfig.worldPosition.x, y: teleportConfig.worldPosition.y }
+                    : this.tileToWorld(teleportConfig.position.x, teleportConfig.position.y);
 
                 const teleport = new TeleportArray({
                     id: teleportConfig.id || teleportKey,
@@ -171,9 +196,19 @@ class GameMap {
                     radius: teleportConfig.radius || 60,
                     targetMapId: teleportConfig.targetMapId,
                     targetPosition: teleportConfig.targetPosition || this.getEntryWorldPosition(),
-                    promptText: teleportConfig.promptText || '按 E 传送',
+                    promptText: teleportConfig.promptText || '按 E 进入法阵',
                     color: teleportConfig.color || 'rgba(120, 200, 255, 0.9)',
                     glowColor: teleportConfig.glowColor || 'rgba(120, 200, 255, 0.4)',
+                    // 静态图片（默认 96×96）
+                    image: teleportConfig.image || null,
+                    imageWidth: teleportConfig.imageWidth || 96,
+                    imageHeight: teleportConfig.imageHeight || 96,
+                    anchor: teleportConfig.anchor || 'center',
+                    // 任务门控：任务未接取时法阵不显示（由 updateQuestGate 刷新）
+                    questRequired: teleportConfig.questRequired || null,
+                    // 战场入口（主线四：死亡/胜利后回到法阵旁）
+                    bossArena: teleportConfig.bossArena === true,
+                    isActive: teleportConfig.isActive !== false,
                 });
 
                 this.teleporters.set(teleport.id, teleport);
@@ -200,6 +235,58 @@ class GameMap {
                 });
 
                 this.signposts.set(signpost.id, signpost);
+            }
+        }
+
+        // 初始化任务门控调查点（镇风桩 / 破损运灯箱等，使用世界坐标，无需 tileToWorld 转换）
+        // 说明：所有调查点存进同一个注册表 this.windPiles（命名沿用最早的镇风桩实现），
+        //       常驻显示，是否可调查由 Main.updateWindPileQuestGates 按任务进度刷新
+        if (this.mapConfig.windPiles) {
+            for (const pileKey in this.mapConfig.windPiles) {
+                const pileConfig = this.mapConfig.windPiles[pileKey];
+
+                const windPile = new WindPile({
+                    id: pileConfig.id || pileKey,
+                    name: pileConfig.name || '镇风桩',
+                    position: pileConfig.position || { x: 0, y: 0 },
+                    radius: pileConfig.radius || 56,
+                    promptText: pileConfig.promptText || '调查镇风桩',
+                    image: pileConfig.image || null,
+                    imageWidth: pileConfig.imageWidth || 58,
+                    imageHeight: pileConfig.imageHeight || 128,
+                    anchor: pileConfig.anchor || 'bottom',
+                    questId: pileConfig.questId || null,
+                    objectiveType: pileConfig.objectiveType || 'investigate',
+                    objectiveTarget: pileConfig.objectiveTarget || null,
+                    dialogue: pileConfig.dialogue || null,
+                });
+
+                this.windPiles.set(windPile.id, windPile);
+            }
+        }
+
+        // 初始化破损运灯箱（LanternBox：与镇风桩共用同一套调查点逻辑与注册表）
+        if (this.mapConfig.lanternBoxes) {
+            for (const boxKey in this.mapConfig.lanternBoxes) {
+                const boxConfig = this.mapConfig.lanternBoxes[boxKey];
+
+                const lanternBox = new LanternBox({
+                    id: boxConfig.id || boxKey,
+                    name: boxConfig.name || '破损运灯箱',
+                    position: boxConfig.position || { x: 0, y: 0 },
+                    radius: boxConfig.radius || 60,
+                    promptText: boxConfig.promptText || '调查破损运灯箱',
+                    image: boxConfig.image || null,
+                    imageWidth: boxConfig.imageWidth || 64,
+                    imageHeight: boxConfig.imageHeight || 64,
+                    anchor: boxConfig.anchor || 'center',
+                    questId: boxConfig.questId || null,
+                    objectiveType: boxConfig.objectiveType || 'investigate',
+                    objectiveTarget: boxConfig.objectiveTarget || null,
+                    dialogue: boxConfig.dialogue || null,
+                });
+
+                this.windPiles.set(lanternBox.id, lanternBox);
             }
         }
 
@@ -331,6 +418,185 @@ class GameMap {
      */
     removeMonster(monsterKey) {
         this.monsters.delete(monsterKey);
+    }
+
+    // ==================== 战场 Boss（摄风山魈） ====================
+
+    /**
+     * 生成战场 Boss
+     * 与普通怪物并列存放在 monsters 中，便于 GameLoop 统一 update / render；
+     * 额外用 this.arenaBoss 记录引用，供战斗结算与战后清理使用。
+     * @param {string} bossKey - 地图配置中的键
+     * @param {Object} bossConfig - 配置：瓦片坐标 {x, y} + monsterId + tuning
+     * @returns {ShanxiaoBoss|null}
+     */
+    spawnArenaBoss(bossKey = 'boss_shanxiao', bossConfig = {}) {
+        if (typeof ShanxiaoBoss !== 'function') {
+            console.warn('[GameMap] 未找到 ShanxiaoBoss 类，跳过战场 Boss 生成');
+            return null;
+        }
+
+        // 已被击败过 → 本图不再生成 Boss（由 Main 在进场时按剧情标记设置）
+        // 说明：战败未击败的情况不在此列，玩家可再次进场重试。
+        if (this.arenaBossDefeated) {
+            console.log('[GameMap] 摄风山魈已被击败，本次进场不再生成 Boss');
+            return null;
+        }
+
+        // 避免重复生成（例如重复进场）
+        if (this.arenaBoss) {
+            this.clearArenaBoss();
+        }
+
+        const worldPosition = this.tileToWorld(bossConfig.x, bossConfig.y);
+        const boss = new ShanxiaoBoss({
+            id: bossKey,
+            monsterId: bossConfig.monsterId || 'boss_shanxiao',
+            position: worldPosition,
+            tuning: bossConfig.tuning || {},
+        });
+
+        boss.tilePosition = { x: bossConfig.x, y: bossConfig.y };
+        boss.isBoss = true;
+        boss.map = this;
+
+        this.monsters.set(bossKey, boss);
+        this.arenaBoss = boss;
+
+        console.log(`[GameMap] 摄风山魈已生成 (${Math.round(worldPosition.x)}, ${Math.round(worldPosition.y)})`);
+        return boss;
+    }
+
+    /**
+     * 清理战场 Boss（战斗结束 / 离开战场时调用）
+     * 从 monsters 中删除实例并释放其资源（精灵图缓存等）
+     * @returns {boolean} 是否清理了 Boss
+     */
+    clearArenaBoss() {
+        if (!this.arenaBoss) return false;
+
+        const boss = this.arenaBoss;
+        this.arenaBoss = null;
+        this.monsters.delete(boss.id);
+
+        if (typeof boss.destroy === 'function') {
+            boss.destroy();
+        }
+
+        return true;
+    }
+
+    /**
+     * 是否存在可战斗的战场 Boss
+     * @returns {boolean}
+     */
+    hasArenaBoss() {
+        return !!(this.arenaBoss && this.arenaBoss.isAlive);
+    }
+
+    /**
+     * 确保战场 Boss 存在（玩家进场时调用）
+     * Boss 在战斗结束 / 离开战场时已被清理，这里按地图配置重新生成
+     * @returns {ShanxiaoBoss|null}
+     */
+    ensureArenaBoss() {
+        if (this.arenaBoss && !this.arenaBoss.isDestroyed) {
+            return this.arenaBoss;
+        }
+
+        const bossConfig = this.mapConfig
+            && this.mapConfig.bossPosition
+            && this.mapConfig.bossPosition.boss_shanxiao;
+
+        if (!bossConfig) {
+            return null;
+        }
+
+        return this.spawnArenaBoss('boss_shanxiao', bossConfig);
+    }
+
+    /**
+     * 设置战场 Boss 的"已被击败"状态（由 Main 按剧情标记 / 战斗结算设置）
+     * 标记为已击败时会立即清理场上的 Boss 实体
+     * @param {boolean} [defeated=true]
+     */
+    setArenaBossDefeated(defeated = true) {
+        this.arenaBossDefeated = !!defeated;
+        if (this.arenaBossDefeated) {
+            this.clearArenaBoss();
+        }
+    }
+
+    /**
+     * 战场 Boss 是否已被击败
+     * @returns {boolean}
+     */
+    isArenaBossDefeated() {
+        return this.arenaBossDefeated === true;
+    }
+
+    /**
+     * 地图正中心的世界坐标（像素）
+     * @returns {{x: number, y: number}}
+     */
+    getCenterWorldPosition() {
+        return {
+            x: this.mapWidth * this.tileSize / 2,
+            y: this.mapHeight * this.tileSize / 2,
+        };
+    }
+
+    /**
+     * 在战场地图正中心生成"归途"传送法阵（击败 Boss 后永久存在）
+     * - 与普通法阵一样由 Player 的交互检测（按 E）触发，targetMapId / targetPosition
+     *   由 Main 按进场时记录的"原来位置"注入
+     * - 幂等：重复调用只刷新落点与提示，不会产生第二座法阵
+     * @param {Object} config
+     * @param {string} [config.id] - 法阵 ID（默认 teleport_boss_exit）
+     * @param {string} [config.name] - 法阵名称
+     * @param {string} [config.targetMapId] - 目标地图 ID
+     * @param {Object} [config.targetPosition] - 目标落点（世界坐标，像素）
+     * @param {string} [config.promptText] - 交互提示
+     * @param {string} [config.image] - ResourceManager 图片键（默认沿用战场入口法阵图）
+     * @returns {TeleportArray|null}
+     */
+    createArenaExitArray(config = {}) {
+        if (typeof TeleportArray !== 'function') {
+            console.warn('[GameMap] 未找到 TeleportArray 类，跳过战场归途法阵生成');
+            return null;
+        }
+
+        const id = config.id || 'teleport_boss_exit';
+        const existed = this.teleporters.get(id);
+        if (existed) {
+            // 已存在（永久法阵）：只刷新本次进场对应的返回点
+            if (config.targetMapId) existed.targetMapId = config.targetMapId;
+            if (config.targetPosition) existed.targetPosition = { ...config.targetPosition };
+            if (config.promptText) existed.promptText = config.promptText;
+            existed.isActive = true;
+            return existed;
+        }
+
+        const center = this.getCenterWorldPosition();
+        const teleport = new TeleportArray({
+            id: id,
+            name: config.name || '传送法阵',
+            position: center,
+            radius: config.radius || 76,
+            targetMapId: config.targetMapId || null,
+            targetPosition: config.targetPosition || this.getEntryWorldPosition(),
+            promptText: config.promptText || '按 E 离开战场',
+            image: config.image || 'teleportArrays.boss_enter',
+            imageWidth: 96,
+            imageHeight: 96,
+            anchor: 'center',
+            bossArena: false,      // 出口法阵走普通换图流程（不记录返回点）
+            isActive: true,
+        });
+
+        this.teleporters.set(teleport.id, teleport);
+        console.log(`[GameMap] 战场归途法阵已生成于地图正中心 (${center.x}, ${center.y})`);
+        return teleport;
     }
 
     /**
@@ -738,6 +1004,8 @@ class GameMap {
         
         this.monsters.forEach(monster => {
             if (!monster.position) return;
+            // 战场 Boss（摄风山魈）由战场流程单独处理，不进入野外切磋交互
+            if (monster.isArenaBoss) return;
             const distance = Math.sqrt(
                 Math.pow(monster.position.x - position.x, 2) +
                 Math.pow(monster.position.y - position.y, 2)
@@ -761,6 +1029,8 @@ class GameMap {
 
         this.teleporters.forEach(teleport => {
             if (!teleport || !teleport.position) return;
+            // 任务门控：未接取对应任务的法阵不可见、也不参与交互检测
+            if (!teleport.isActive) return;
             const distance = Math.sqrt(
                 Math.pow(teleport.position.x - position.x, 2) +
                 Math.pow(teleport.position.y - position.y, 2)
@@ -784,6 +1054,32 @@ class GameMap {
         this.signposts.forEach(signpost => {
             if (signpost && signpost.isActive && signpost.isPlayerInRange(position)) {
                 nearby.push(signpost);
+            }
+        });
+        return nearby;
+    }
+
+    /**
+     * 添加调查点实例（镇风桩 / 破损运灯箱等）
+     * @param {WindPile} windPile
+     */
+    addWindPile(windPile) {
+        if (!windPile) return;
+        this.windPiles.set(windPile.id, windPile);
+    }
+
+    /**
+     * 获取玩家附近“可调查”的调查点（镇风桩、破损运灯箱等）
+     * 只有当前任务步骤要求调查、且尚未调查的调查点才会被返回
+     * @param {Object} position - {x, y}
+     * @param {number} radius - 搜索半径
+     * @returns {Array} 调查点列表
+     */
+    getWindPilesNearby(position, radius) {
+        const nearby = [];
+        this.windPiles.forEach(windPile => {
+            if (windPile && windPile.isPlayerInRange(position)) {
+                nearby.push(windPile);
             }
         });
         return nearby;

@@ -90,6 +90,7 @@ class NPC {
         this.onDialogueEnd = null;   // 对话结束回调
         this.onOpenShop = null;      // 打开商店回调
         this.onBreathHeal = null;      // 定息引气回调
+        this.onFoundationTrial = null; // 筑基调息回调（章末：禁键 → 主角朝下 → 背后气场 5 秒 → 续接对话）
         
         // ========== 初始化 ==========
         this.initAnimations();
@@ -811,6 +812,26 @@ class NPC {
         this.path = [];
         this.currentPathIndex = 0;
         console.log(`[NPC] ${this.name} 搬迁至瓦片 (${tileX}, ${tileY}) → 世界 (${Math.round(worldPos.x)}, ${Math.round(worldPos.y)})`);
+    }
+
+    /**
+     * 重新定位NPC（世界坐标，像素）
+     * 用于按美术图实测像素点精确摆放（不做瓦片取整）
+     * @param {number} worldX - 目标世界坐标 X（像素）
+     * @param {number} worldY - 目标世界坐标 Y（像素）
+     * @param {GameMap} map - 当前地图实例（可选，仅用于日志中换算瓦片）
+     */
+    repositionWorld(worldX, worldY, map) {
+        this.position.x = worldX;
+        this.position.y = worldY;
+        // 重置移动状态
+        this.isMoving = false;
+        this.moveTarget = null;
+        this.path = [];
+        this.currentPathIndex = 0;
+        const tile = (map && map.worldToTile) ? map.worldToTile(worldX, worldY) : null;
+        const tileInfo = tile ? `（约瓦片 ${tile.x}, ${tile.y}）` : '';
+        console.log(`[NPC] ${this.name} 搬迁至世界坐标 (${Math.round(worldX)}, ${Math.round(worldY)})${tileInfo}`);
     }
 
     // ==================== 渲染 ====================

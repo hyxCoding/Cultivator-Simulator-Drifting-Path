@@ -16,6 +16,7 @@ class GameLoop {
         
         // 实体引用
         this.player = null;           // 玩家实例
+        this.playerCombat = null;     // 玩家战斗系统（特效分层渲染，见 js/PlayerCombat.js）
         this.currentMap = null;       // 当前地图实例
         this.camera = null;           // 摄像机实例
         this.inputManager = null;     // 输入管理器实例
@@ -221,6 +222,15 @@ class GameLoop {
             });
         }
         
+        // 5c. 更新调查点（镇风桩 / 破损运灯箱，高亮脉动等）
+        if (this.currentMap && this.currentMap.windPiles) {
+            this.currentMap.windPiles.forEach(windPile => {
+                if (windPile && windPile.update) {
+                    windPile.update(deltaTime);
+                }
+            });
+        }
+
         // 6. 更新地图场景动画（落叶、飘动等环境效果）
         if (this.currentMap && this.currentMap.updateSceneAnimations) {
             this.currentMap.updateSceneAnimations(deltaTime);
@@ -284,6 +294,15 @@ class GameLoop {
             });
         }
 
+        // 3b. 渲染调查点（镇风桩 / 破损运灯箱，常驻显示）
+        if (this.currentMap && this.currentMap.windPiles) {
+            this.currentMap.windPiles.forEach(windPile => {
+                if (windPile && windPile.render) {
+                    windPile.render(this.ctx, this.camera);
+                }
+            });
+        }
+
         // 4. 渲染传送法阵
         if (this.currentMap && this.currentMap.teleporters) {
             this.currentMap.teleporters.forEach(teleport => {
@@ -293,17 +312,27 @@ class GameLoop {
             });
         }
         
-        // 5. 渲染玩家（最上层）
+        // 5. 渲染玩家战斗特效（下层：气场类，位于角色之下、地图之上）
+        if (this.playerCombat && this.playerCombat.renderUnderLayer) {
+            this.playerCombat.renderUnderLayer(this.ctx, this.camera);
+        }
+
+        // 6. 渲染玩家（最上层）
         if (this.player && this.player.render) {
             this.player.render(this.ctx, this.camera);
         }
+
+        // 6b. 渲染玩家战斗特效（上层：剑气 / 灵息弹 / 命中特效）
+        if (this.playerCombat && this.playerCombat.renderOverLayer) {
+            this.playerCombat.renderOverLayer(this.ctx, this.camera);
+        }
         
-        // 6. 渲染UI（最上层）
+        // 7. 渲染UI（最上层）
         if (this.uiManager && this.uiManager.render) {
             this.uiManager.render(this.ctx);
         }
         
-        // 6. 执行额外渲染回调
+        // 8. 执行额外渲染回调
         this.extraRenderCallbacks.forEach(callback => {
             callback(this.ctx, interpolation);
         });
@@ -406,6 +435,14 @@ class GameLoop {
      */
     setPlayer(player) {
         this.player = player;
+    }
+
+    /**
+     * 设置玩家战斗系统（用于战斗特效的分层渲染）
+     * @param {Object} playerCombat - PlayerCombatSystem 实例
+     */
+    setPlayerCombat(playerCombat) {
+        this.playerCombat = playerCombat;
     }
 
     /**

@@ -27,6 +27,44 @@ class QuestSystem {
         this.onQuestComplete = null;   // (questId, rewards) => void
         this.onQuestFail = null;       // (questId) => void
         this.onQuestAccept = null;     // (questId) => void  ← 新任务解锁时触发（NPC搬迁等）
+
+        // ====== 剧情标记（story flags）======
+        // 与任务状态互补：记录“已经发生过的剧情事实”（如筑基已完成、码头告别已完成），
+        // 供对话选择器（Chapter1Config.getDialogueForNPC 的 whenStoryFlag 规则）与
+        // 章末内容（码头登船路标等）在存档 / 读档后依然生效。
+        /** @type {Object<string, *>} flag 名 → 值（true / 字符串 / 数字） */
+        this.storyFlags = {};
+    }
+
+    // ==================== 剧情标记 ====================
+
+    /**
+     * 设置剧情标记
+     * @param {string} flag - 标记名
+     * @param {*} [value=true] - 标记值
+     */
+    setStoryFlag(flag, value = true) {
+        if (!flag) return;
+        this.storyFlags[flag] = value;
+        console.log(`[QuestSystem] 剧情标记: ${flag} = ${value}`);
+    }
+
+    /**
+     * 是否已设置该剧情标记
+     * @param {string} flag
+     * @returns {boolean}
+     */
+    hasStoryFlag(flag) {
+        return !!this.storyFlags[flag];
+    }
+
+    /**
+     * 读取剧情标记值
+     * @param {string} flag
+     * @returns {*}
+     */
+    getStoryFlag(flag) {
+        return this.storyFlags[flag];
     }
 
  /**
@@ -152,6 +190,33 @@ class QuestSystem {
             }
         }
         return false;
+    }
+
+    /**
+     * 获取任务的“当前待完成目标”（第一个未完成的目标）
+     * 与 updateQuestProgress 的推进规则保持一致（只推进第一个未完成目标）
+     * @param {string} questId
+     * @returns {Object|null} 目标对象或 null（任务未接取 / 已无未完成目标）
+     */
+    getCurrentObjective(questId) {
+        const entry = this.quests.get(questId);
+        if (!entry || entry.state !== QuestSystem.STATE_ACTIVE || !entry.objectives) return null;
+        return entry.objectives.find(obj => !obj.completed) || null;
+    }
+
+    /**
+     * 判断某个目标是否正好是任务的“当前待完成目标”
+     * 用于镇风桩等“只能按顺序推进”的调查点门控
+     * @param {string} questId
+     * @param {string} objectiveType
+     * @param {string} target
+     * @returns {boolean}
+     */
+    isObjectiveCurrent(questId, objectiveType, target) {
+        const current = this.getCurrentObjective(questId);
+        if (!current) return false;
+        return current.type === objectiveType &&
+            (current.target === target || current.target === null);
     }
 
     // ==================== 状态转换 ====================
@@ -330,6 +395,7 @@ class QuestSystem {
                     completedTime: entry.completedTime,
                 },
             ]),
+            storyFlags: { ...this.storyFlags },
         };
     }
 
@@ -339,6 +405,8 @@ class QuestSystem {
      */
     deserialize(data) {
         if (!data) return;
+        // 剧情标记（旧存档无此字段 → 空对象）
+        this.storyFlags = data.storyFlags ? { ...data.storyFlags } : {};
         if (data.quests) {
             this.quests = new Map(data.quests.map(([id, entryData]) => [
                 id,

@@ -10,8 +10,9 @@ class TrainingZone {
      * @param {Object} config.position - 世界坐标 {x, y}
      * @param {string} config.actionType - 动作类型：'attack', 'skill_lingxidan', 'skill_hutishu', 'dodge'
      * @param {string} config.promptText - 提示文本
-     * @param {string} config.actionKey - 触发按键：'j', 'k', 'l', 'shift'
-     * @param {number} config.radius - 判定半径，默认55
+     * @param {string} config.actionKey - 触发按键：'j' | 'u' | 'i' | 'l'
+     * @param {number} config.radius - 绘制半径，默认55
+     * @param {number} config.detectRadius - 判定半径，默认同绘制半径
      */
     constructor(config = {}) {
         this.id = config.id || `training_${Date.now()}`;
@@ -21,6 +22,7 @@ class TrainingZone {
         this.promptText = config.promptText || '按 J 攻击';
         this.actionKey = config.actionKey || 'j';
         this.radius = config.radius || 55;
+        this.detectRadius = config.detectRadius || this.radius;
 
         this.isCompleted = false;
         this.isVisible = true;
@@ -127,13 +129,13 @@ class TrainingZone {
     }
 
     /**
-     * 检查玩家是否在范围内
+     * 检查玩家是否在范围内（使用判定半径 detectRadius）
      */
     isPlayerInRange(playerPosition) {
         if (this.isCompleted || !this.isVisible) return false;
         const dx = this.position.x - playerPosition.x;
         const dy = this.position.y - playerPosition.y;
-        return Math.sqrt(dx * dx + dy * dy) <= this.radius;
+        return Math.sqrt(dx * dx + dy * dy) <= this.detectRadius;
     }
 
     /**

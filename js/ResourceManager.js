@@ -32,10 +32,24 @@ class ResourceManager {
                     task_panel: 'assets/images/ui/task_panel.png',
                     skill_panel: 'assets/images/ui/skill_panel.png',
                     inventory_panel: 'assets/images/ui/inventory_panel.png',
+                    // 气血条 / 灵息条（HUD 自定义图片，见 js/PlayerCombat.js CONFIG.hud）
+                    //   *_bar_bg   —— 外框，500×64
+                    //   *_bar_fill —— 内条（血量/灵息），454×64；源图 X∈[0,78) 为左侧固定装饰，
+                    //                  X∈[78,454) 才是真正的血量/灵息像素（按当前值比例裁切显示）
+                    // 两图左上角对齐绘制：先画内条，再画外框
                     health_bar_bg: 'assets/images/ui/health_bar_bg.png',
                     health_bar_fill: 'assets/images/ui/health_bar_fill.png',
                     mana_bar_bg: 'assets/images/ui/mana_bar_bg.png',
                     mana_bar_fill: 'assets/images/ui/mana_bar_fill.png',
+                    // 左下角技能栏图标（规格 100×100；见 js/PlayerCombat.js CONFIG.hud.skillBar）
+                    //   skill_lingxidan —— U 灵息弹
+                    //   skill_hutishu   —— I 护体术
+                    //   skill_dodge     —— L 闪避
+                    // 普通攻击（J）不占左下角技能栏，故没有对应图片；
+                    // 缺图 / 尺寸不符时技能栏该格回退程序化方框（按键与倒计时照常绘制）
+                    skill_lingxidan: 'assets/images/ui/skill_lingxidan.png',
+                    skill_hutishu: 'assets/images/ui/skill_hutishu.png',
+                    skill_dodge: 'assets/images/ui/skill_dodge.png',
                 },
                 
                 // === 地图传送界面 ===
@@ -69,6 +83,8 @@ class ResourceManager {
                     zhaochen_xiancheng: 'assets/images/maps/zhaochen_xiancheng/bg.png',
                     wuxiang_tianque: 'assets/images/maps/wuxiang_tianque/bg.png',
                     boss_arena: 'assets/images/maps/boss_arena/bg.png',
+                    // 主线四：摄风山魈战场（1280×720，与画布同尺寸）
+                    boss_arena_ch1: 'assets/images/maps/boss_arena_ch1/bg.png',
                 },
 
                 mapCollisions: {
@@ -77,6 +93,8 @@ class ResourceManager {
                     zhaochen_xiancheng: 'assets/images/maps/zhaochen_xiancheng/collision.png',
                     wuxiang_tianque: 'assets/images/maps/wuxiang_tianque/collision.png',
                     boss_arena: 'assets/images/maps/boss_arena/collision.png',
+                    // 主线四战场碰撞图：白色可通行 / 黑色不可通行，1280×720
+                    boss_arena_ch1: 'assets/images/maps/boss_arena_ch1/collision.png',
                 },
 
                 // === 主角动画精灵图 ===
@@ -168,7 +186,10 @@ class ResourceManager {
                     fenglang_hurt: 'assets/images/monsters/fenglang/hurt.png',
                     fenglang_dead: 'assets/images/monsters/fenglang/dead.png',
                     
-                    // Boss - 摄风山魈
+                    // Boss - 摄风山魈（主线四 · 山口石台战场）
+                    // 规格：idle/walk/attack/skill1/skill2/hurt 为 4 行（下/左/右/上）× 6 帧、单帧 96×96；
+                    //       dead 为单行 6 帧、单帧 96×96。
+                    // 逻辑动作与资源键的对应关系（横扫=attack / 扑击=skill1 / 蓄力=skill2）见 js/ShanxiaoBoss.js 顶部说明
                     boss_shanxiao_walk: 'assets/images/monsters/boss_shanxiao/walk.png',
                     boss_shanxiao_idle: 'assets/images/monsters/boss_shanxiao/idle.png',
                     boss_shanxiao_attack: 'assets/images/monsters/boss_shanxiao/attack.png',
@@ -220,8 +241,8 @@ class ResourceManager {
                     guixiang_pai: 'assets/images/quest_items/guixiang_pai.png',
                     hundeng: 'assets/images/quest_items/hundeng.png',
                     yisha: 'assets/images/quest_items/yisha.png',
-                    yunye_canye: 'assets/images/quest_items/yunye_canye.png',
                     mingce: 'assets/images/quest_items/mingce.png',
+                    zhenhe: 'assets/images/quest_items/zhenhe.png',
                     zhenfeng_heipian: 'assets/images/quest_items/zhenfeng_heipian.png',
                     lingcao: 'assets/images/quest_items/lingcao.png',
                 },
@@ -273,9 +294,50 @@ class ResourceManager {
 
                 },
                 
-                // === 路标图标 ===
+                // === 路标图标（地图交互点；靠近后显示“按 E 键…”提示） ===
+                // 绘制规则：以路标世界坐标为中心、按 Chapter1Config 里的 imageWidth/imageHeight 绘制
+                //          （两处路标的显示尺寸都是 60×60）；美术原图建议同尺寸或更高（会缩放）。
+                // 缺图 / 加载失败（ResourceManager 返回 32×32 占位图）时，Signpost 回退到程序化木牌渲染。
                 signposts: {
                     herb_collect: 'assets/images/signposts/herb_collect.png',
+                    depart_boat: 'assets/images/signposts/depart_boat.png',
+                },
+
+                // === 传送法阵（主线四：山口石台，静态图 96×96） ===
+                teleportArrays: {
+                    boss_enter: 'assets/images/teleport_arrays/boss_enter.png',
+                },
+
+                // === 镇风桩（青岚浮野调查点，58×128，每根桩图片不同） ===
+                windPiles: {
+                    zhenfeng_pile_1: 'assets/images/wind_piles/zhenfeng_pile_1.png',
+                    zhenfeng_pile_2: 'assets/images/wind_piles/zhenfeng_pile_2.png',
+                    zhenfeng_pile_3: 'assets/images/wind_piles/zhenfeng_pile_3.png',
+                },
+                // === 破损运灯箱（青岚浮野调查点，原图 64×58） ===
+                lanternBoxes: {
+                    broken_lantern_box: 'assets/images/lantern_box/broken_lantern_box.png',
+                },
+                // === 战斗特效（Boss 技能表现：叠加在 Boss 之上绘制） ===
+                effects: {
+                    // 扑击落地扬尘：1 行 6 帧，单帧 48×48
+                    boss_pounce_dust: 'assets/images/effects/boss_pounce_dust.png',
+                    // 蓄力风旋：1 行 4 帧，单帧 48×48
+                    boss_charge_wind: 'assets/images/effects/boss_charge_wind.png',
+                    // === 主角战斗特效（PlayerCombatSystem；缺图时自动程序化绘制） ===
+                    // 剑气：1 行 4 帧，单帧 128×108
+                    player_sword_aura: 'assets/images/effects/player_sword_aura.png',
+                    // 灵息弹弹体：4 行（右/左/下/上）× 4 帧，单帧 32×32
+                    player_lingxidan: 'assets/images/effects/player_lingxidan.png',
+                    // 灵息弹命中：1 行 6 帧，单帧 48×48
+                    player_lingxidan_hit: 'assets/images/effects/player_lingxidan_hit.png',
+                    // 护体术气场：1 行 4 帧，单帧 48×64（角色之下、地图之上）
+                    player_hutishu_aura: 'assets/images/effects/player_hutishu_aura.png',
+                    // 闪避气场：1 行 4 帧，单帧 48×64（角色之下、地图之上）
+                    player_dodge_aura: 'assets/images/effects/player_dodge_aura.png',
+                    // 筑基调息气场（章末：与祁伯对话“开始筑基调息”时在主角背后播放 5 秒）
+                    // 1 行 8 帧，单帧 48×128（角色之下、地图之上）；缺图时自动程序化绘制
+                    player_zhuji_aura: 'assets/images/effects/player_zhuji_aura.png',
                 },
                 // === 小游戏相关 ===
                 miniGame: {
@@ -357,7 +419,57 @@ class ResourceManager {
                 },
             },
         };
-        
+
+        // ========== 资源分组（按业务场景组织的资源键集合） ==========
+        // 说明：每一项都是上面 this.resources 里的“点号路径”，
+        //       供 preloadResourceGroup / releaseResourceGroup / getResourceGroupImagePaths 使用，
+        //       避免各调用处重复硬编码文件列表（新增资源只需在这里补一行）
+        this.resourceGroups = {
+            // 主角战斗系统：剑气 / 灵息弹 / 命中 / 护体术气场 / 闪避气场 / 气血条 / 灵息条（进入游戏前预加载）
+            playerCombat: {
+                images: [
+                    'player.sanxiu_idle',
+                    'player.sanxiu_walk',
+                    'player.sanxiu_skill',
+                    'player.sanxiu_hurt',
+                    'effects.player_sword_aura',
+                    'effects.player_lingxidan',
+                    'effects.player_lingxidan_hit',
+                    'effects.player_hutishu_aura',
+                    'effects.player_dodge_aura',
+                    // HUD 资源条：气血条 / 灵息条（外框 500×64 + 内条 454×64）
+                    'ui.health_bar_bg',
+                    'ui.health_bar_fill',
+                    'ui.mana_bar_bg',
+                    'ui.mana_bar_fill',
+                    // 左下角技能栏图标：U 灵息弹 / I 护体术 / L 闪避（规格 100×100）
+                    // 普通攻击（J）不占技能栏，故没有对应图标
+                    'ui.skill_lingxidan',
+                    'ui.skill_hutishu',
+                    'ui.skill_dodge',
+                ],
+                audio: [],
+            },
+            // 主线四：摄风山魈战场（山口石台）
+            // 进入战场前预加载；战斗结束时由 ShanxiaoBoss.destroy() 释放，保证二次进场动画完整
+            bossArena: {
+                images: [
+                    // 摄风山魈 7 套动画（全套一起加载，避免切换动作时首帧空白）
+                    'monsters.boss_shanxiao_idle',
+                    'monsters.boss_shanxiao_walk',
+                    'monsters.boss_shanxiao_attack',
+                    'monsters.boss_shanxiao_skill1',
+                    'monsters.boss_shanxiao_skill2',
+                    'monsters.boss_shanxiao_hurt',
+                    'monsters.boss_shanxiao_dead',
+                    // 战斗特效：扑击落地扬尘 / 蓄力风旋
+                    'effects.boss_pounce_dust',
+                    'effects.boss_charge_wind',
+                ],
+                audio: [],
+            },
+        };
+
         // 图片缓存，用于存储已加载的图片对象
         this.imageCache = new Map();
         // 音频缓存，用于存储已加载的音频对象
@@ -539,5 +651,85 @@ class ResourceManager {
         }
         
         await Promise.all(loadPromises);
+    }
+
+    /**
+     * 释放单张图片缓存
+     * 用于战斗结束后清理 Boss 等一次性资源（下次使用时 loadImage 会重新读取）
+     * @param {string} path - 资源路径（点号分隔）
+     * @returns {boolean} 是否释放了缓存
+     */
+    releaseImage(path) {
+        const imagePath = this.getImagePath(path);
+        if (!imagePath) return false;
+        return this.imageCache.delete(imagePath);
+    }
+
+    /**
+     * 批量释放图片缓存
+     * @param {string[]} paths - 资源路径数组
+     * @returns {number} 实际释放的数量
+     */
+    releaseImages(paths) {
+        if (!Array.isArray(paths)) return 0;
+        let released = 0;
+        paths.forEach(path => {
+            if (this.releaseImage(path)) {
+                released++;
+            }
+        });
+        return released;
+    }
+
+    /**
+     * 获取资源分组（点号键列表）
+     * @param {string} name - 分组名，如 'bossArena'
+     * @returns {{images: string[], audio: string[]}} 分组副本（避免调用方误改配置）
+     */
+    getResourceGroup(name) {
+        const group = this.resourceGroups ? this.resourceGroups[name] : null;
+        if (!group) {
+            console.warn(`资源分组不存在: ${name}`);
+            return { images: [], audio: [] };
+        }
+        return {
+            images: (group.images || []).slice(),
+            audio: (group.audio || []).slice(),
+        };
+    }
+
+    /**
+     * 获取资源分组内图片的真实文件路径（便于排查资源缺失）
+     * @param {string} name - 分组名，如 'bossArena'
+     * @returns {string[]} 绝对/相对路径数组
+     */
+    getResourceGroupImagePaths(name) {
+        return this.getResourceGroup(name).images
+            .map(key => this.getImagePath(key))
+            .filter(path => !!path);
+    }
+
+    /**
+     * 预加载整个资源分组（图片 + 音频）
+     * @param {string} name - 分组名，如 'bossArena'
+     * @returns {Promise<number>} 本次加载的资源数量
+     */
+    async preloadResourceGroup(name) {
+        const group = this.getResourceGroup(name);
+        const tasks = group.images.map(key => this.loadImage(key))
+            .concat(group.audio.map(key => this.loadAudio(key)));
+
+        await Promise.all(tasks);
+        return tasks.length;
+    }
+
+    /**
+     * 释放资源分组内的图片缓存（音频缓存不回收）
+     * 用于 Boss 战结束后清理一次性资源，下次使用时会重新读取文件
+     * @param {string} name - 分组名，如 'bossArena'
+     * @returns {number} 实际释放的图片数量
+     */
+    releaseResourceGroup(name) {
+        return this.releaseImages(this.getResourceGroup(name).images);
     }
 }

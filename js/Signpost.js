@@ -2,6 +2,8 @@
  * 路标类（Signpost）
  * 地图上的交互点，靠近后按 E 可触发回调（如开启小游戏）
  * 支持加载图片（通过 ResourceManager 资源键），无图片时回退到木牌渲染
+ * 缺图 / 加载失败时保持 this.image = null，由 render() 走程序化木牌（不画品红占位块），详见 _loadImage()
+ * 图片对位由 config.anchor 控制：'center'（默认，以坐标为中心）/ 'bottom'（图片底边贴着坐标，适合带杆木牌）
  * 独立实体，由 GameMap 持有、GameLoop+Main 协调更新渲染
  */
 class Signpost {
@@ -16,6 +18,7 @@ class Signpost {
      * @param {string}   config.image       - ResourceManager 图片键（可选），如 'signposts.herb_collect'
      * @param {number}   config.imageWidth  - 图片显示宽度（px），不填则自动取原图宽
      * @param {number}   config.imageHeight - 图片显示高度（px），不填则自动取原图高
+     * @param {string}   config.anchor      - 图片对位（可选）：'center'（默认，以坐标为中心）/ 'bottom'（底边贴坐标）
      * @param {string}   config.questRequired - 需要的任务 ID（可选），仅当任务已接取（active/completed）时路标才可见
      * @param {string}   config.gameId      - 关联的小游戏 ID（可选），Main 会在 activate 后自动启动
      * @param {boolean}  config.oneShot     - 是否只触发一次，默认 false
@@ -30,6 +33,7 @@ class Signpost {
         this.imageKey = config.image || null;
         this.imageWidth = config.imageWidth || null;
         this.imageHeight = config.imageHeight || null;
+        this.anchor = config.anchor === 'bottom' ? 'bottom' : 'center';   // 图片对位，见类头说明
         this.questRequired = config.questRequired || null;  // 任务门控
         this.gameId = config.gameId || null;
         this.oneShot = config.oneShot ?? false;
@@ -43,13 +47,22 @@ class Signpost {
 
     /**
      * 异步加载图片
+     * 美工把图放到 ResourceManager.signposts 里登记的路径即自动生效。
+     * 说明：ResourceManager 在图片不存在时会返回一张 dataURL 占位图，
+     *       检测到占位图（data: 开头）时保持 this.image = null，
+     *       由 render() 走程序化木牌渲染，避免地图上出现品红占位块。
      */
     _loadImage() {
         if (!this.imageKey) return;
         try {
             const resourceManager = ResourceManager.getInstance();
             resourceManager.loadImage(this.imageKey).then(img => {
-                if (img) this.image = img;
+                if (!img) return;
+                if (typeof img.src === 'string' && img.src.startsWith('data:')) {
+                    console.warn(`[Signpost] 路标图片缺失，回退到木牌渲染: ${this.imageKey}`);
+                    return;
+                }
+                this.image = img;
             });
         } catch (e) {
             // 静默失败，后续回退到木牌渲染
@@ -118,10 +131,11 @@ class Signpost {
             ctx.fill();
             ctx.globalAlpha = 1;
 
-            // 绘制图片
+            // 绘制图片（anchor='bottom' 时图片底边落在路标坐标上，适合带杆的木牌美术）
             const imgW = this.imageWidth || this.image.width || 48;
             const imgH = this.imageHeight || this.image.height || 48;
-            ctx.drawImage(this.image, screenX - imgW / 2, screenY - imgH / 2, imgW, imgH);
+            const imgY = this.anchor === 'bottom' ? screenY - imgH : screenY - imgH / 2;
+            ctx.drawImage(this.image, screenX - imgW / 2, imgY, imgW, imgH);
             ctx.restore();
             return;
         }
@@ -167,8 +181,9 @@ class Signpost {
         const renderPos = camera ? camera.getRenderPosition() : { x: 0, y: 0 };
         const screenX = this.position.x - renderPos.x;
         const baseY = this.position.y - renderPos.y;
-        // 有图片时提示在图片上方，无图片时提示在牌子上方
-        const offsetY = this.image ? 36 : 40 + 24 - 4 + 6;
+        // 有图片时提示在图片上方：center 与图片顶边相距 36px；bottom 需再抬高整张图高
+        const imgH = this.imageHeight || (this.image && this.image.height) || 48;
+        const offsetY = this.image ? (this.anchor === 'bottom' ? imgH + 10 : 36) : 40 + 24 - 4 + 6;
         const promptY = baseY - offsetY;
         const fullText = `按 E 键${this.promptText}`;
 

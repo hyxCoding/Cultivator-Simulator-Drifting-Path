@@ -25,6 +25,11 @@ class PickupItem {
         this.promptText = config.promptText || '按 E 拾取';
         this.count = config.count || 1;
         this.image = config.image || null;
+        // 图片缺失时 ResourceManager 会返回 dataURL 占位图 → 视为无图，
+        // 回退到程序化渲染（金色菱形），避免地图上出现品红占位块（与 WindPile/LanternBox 一致）
+        if (this.image && typeof this.image.src === 'string' && this.image.src.startsWith('data:')) {
+            this.image = null;
+        }
         this.questId = config.questId || null;
         this.objectiveType = config.objectiveType || 'find_item';
 
