@@ -360,10 +360,14 @@ update(dt, input) {
             }
         }
     }
-_renderPlayer(ctx) {
+
+    _renderPlayer(ctx) {
         const px = this.player.x, py = this.player.y;
-        const pw = this.player.width, ph = this.player.height;
-        const FRAME_SIZE = 32;
+        const FRAME_SIZE = 32;                              // 源帧尺寸（player.sanxiu_* 为 4 行 × 4 帧 32×32）
+        // 显示尺寸与大地图 Player 一致（32×32 帧 → 48×64，见 MiniGame.playerSpriteWidth）；
+        // 走位碰撞盒仍是 this.player.width/height（22×26）—— 只决定「能不能站」，不决定画多大。
+        const drawW = this.playerSpriteWidth;
+        const drawH = this.playerSpriteHeight;
 
         // 状态判定：闲置(静止) / 行走(移动无风) / 飞行(移动+起风)
         const isFlying = this.isMoving && this.wind.active && this.wind.fadeAlpha > 0.1;
@@ -381,14 +385,14 @@ _renderPlayer(ctx) {
                 const sx = this.animFrame * FRAME_SIZE;
                 const sy = this.playerDir * FRAME_SIZE;
                 ctx.drawImage(img, sx, sy, FRAME_SIZE, FRAME_SIZE,
-                    -FRAME_SIZE / 2, -FRAME_SIZE / 2, FRAME_SIZE, FRAME_SIZE);
+                    -drawW / 2, -drawH / 2, drawW, drawH);
                 ctx.restore();
             } else {
-                // 降级：蓝色角色 + 翅膀
+                // 降级：蓝色角色 + 翅膀（按大地图显示尺寸画）
                 ctx.fillStyle = '#66aaff';
                 ctx.shadowColor = '#88ccff';
                 ctx.shadowBlur = 12;
-                ctx.fillRect(px - pw / 2, py - ph / 2 - 2, pw, ph + 4);
+                ctx.fillRect(px - drawW * 0.45, py - drawH * 0.42 - 2, drawW * 0.9, drawH * 0.84 + 4);
                 ctx.shadowBlur = 0;
                 ctx.strokeStyle = 'rgba(255,255,255,0.6)';
                 ctx.lineWidth = 2;
@@ -396,9 +400,9 @@ _renderPlayer(ctx) {
                 for (let side = -1; side <= 1; side += 2) {
                     const flap = Math.sin(t2 * 6) * 6;
                     ctx.beginPath();
-                    ctx.moveTo(px + side * pw / 2, py - 4);
-                    ctx.lineTo(px + side * (pw / 2 + 12 + flap), py - 10);
-                    ctx.lineTo(px + side * (pw / 2 + flap), py + 4);
+                    ctx.moveTo(px + side * drawW * 0.45, py - drawH * 0.06);
+                    ctx.lineTo(px + side * (drawW * 0.45 + 12 + flap), py - drawH * 0.16);
+                    ctx.lineTo(px + side * (drawW * 0.45 + flap), py + drawH * 0.06);
                     ctx.closePath();
                     ctx.stroke();
                 }
@@ -410,14 +414,10 @@ _renderPlayer(ctx) {
                 const sx = 0; // 始终第一帧（静止姿态）
                 const sy = this.playerDir * FRAME_SIZE;
                 ctx.drawImage(img, sx, sy, FRAME_SIZE, FRAME_SIZE,
-                    px - FRAME_SIZE / 2, py - FRAME_SIZE / 2, FRAME_SIZE, FRAME_SIZE);
+                    px - drawW / 2, py - drawH / 2, drawW, drawH);
             } else {
-                // 降级：暖色调方形
-                ctx.fillStyle = '#ff8844';
-                ctx.fillRect(px - pw / 2, py - ph / 2, pw, ph);
-                ctx.fillStyle = '#ffffff';
-                ctx.fillRect(px - 4, py - 6, 4, 4);
-                ctx.fillRect(px + 2, py - 6, 4, 4);
+                // 降级：暖色调方形（按大地图显示尺寸画）
+                this._renderPlayerFallback(ctx, px, py, drawW, drawH);
             }
         } else {
             // === 行走：行走精灵表动画 ===
@@ -427,16 +427,21 @@ _renderPlayer(ctx) {
                 const sx = this.animFrame * FRAME_SIZE;
                 const sy = this.playerDir * FRAME_SIZE;
                 ctx.drawImage(img, sx, sy, FRAME_SIZE, FRAME_SIZE,
-                    px - FRAME_SIZE / 2, py - FRAME_SIZE / 2, FRAME_SIZE, FRAME_SIZE);
+                    px - drawW / 2, py - drawH / 2, drawW, drawH);
             } else {
-                // 降级：暖色调方形
-                ctx.fillStyle = '#ff8844';
-                ctx.fillRect(px - pw / 2, py - ph / 2, pw, ph);
-                ctx.fillStyle = '#ffffff';
-                ctx.fillRect(px - 4, py - 6, 4, 4);
-                ctx.fillRect(px + 2, py - 6, 4, 4);
+                // 降级：暖色调方形（按大地图显示尺寸画）
+                this._renderPlayerFallback(ctx, px, py, drawW, drawH);
             }
         }
+    }
+
+    /** 缺精灵图时的程序化小人（尺寸与大地图玩家显示尺寸一致） */
+    _renderPlayerFallback(ctx, px, py, drawW, drawH) {
+        ctx.fillStyle = '#ff8844';
+        ctx.fillRect(px - drawW * 0.45, py - drawH * 0.4, drawW * 0.9, drawH * 0.8);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(px - drawW * 0.17, py - drawH * 0.24, drawW * 0.14, drawH * 0.09);
+        ctx.fillRect(px + drawW * 0.03, py - drawH * 0.24, drawW * 0.14, drawH * 0.09);
     }
 
     _renderInteractionHint(ctx) {

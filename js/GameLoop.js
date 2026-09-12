@@ -48,6 +48,9 @@ class GameLoop {
         // 调试信息
         this.debugMode = false;
         this.debugInfo = {};
+
+        // 调试：碰撞网格覆盖层（F2 切换；用于改完 collision.png / collisionData 后肉眼核对）
+        this.collisionDebug = false;
         
         // 绑定循环函数
         this.loop = this.loop.bind(this);
@@ -275,6 +278,11 @@ class GameLoop {
         if (this.currentMap && this.currentMap.render) {
             this.currentMap.render(this.ctx, this.camera);
         }
+
+        // 1b. 调试：碰撞网格覆盖层（画在地图之上、实体之下 → 不影响看角色）
+        if (this.collisionDebug) {
+            this.renderCollisionDebug(this.ctx);
+        }
         
         // 2. 渲染NPC
         if (this.currentMap && this.currentMap.npcs) {
@@ -341,6 +349,89 @@ class GameLoop {
         if (this.debugMode) {
             this.renderDebugInfo(this.ctx);
         }
+    }
+
+    /**
+     * 开关碰撞网格调试覆盖层（Main 用 F2 调用）
+     * @param {boolean} enabled
+     * @returns {boolean} 当前状态
+     */
+    setCollisionDebug(enabled) {
+        this.collisionDebug = !!enabled;
+        return this.collisionDebug;
+    }
+
+    /**
+     * 切换碰撞网格调试覆盖层
+     * @returns {boolean} 切换后的状态
+     */
+    toggleCollisionDebug() {
+        this.collisionDebug = !this.collisionDebug;
+        return this.collisionDebug;
+    }
+
+    /**
+     * 渲染碰撞网格调试覆盖层：绿 = 可通行，红 = 阻挡（只画视口内的瓦片）
+     * 用途：频繁改 collision.png（或 collisionData）后，进游戏按 F2 立刻核对
+     *      “走不过去的地方是不是红的、该能走的是不是绿的”。
+     * 数据源是当前地图 TileSystem 已生成的碰撞表（= 游戏实际用于碰撞判定的表），
+     * 因此看到的红绿就是真实的判定结果。
+     * @param {CanvasRenderingContext2D} ctx
+     */
+    renderCollisionDebug(ctx) {
+        const map = this.currentMap;
+        if (!map || !map.tileSystem || !this.camera) return;
+
+        const grid = map.tileSystem.walkableTiles;   // 直接读表（避免 getWalkableGrid 每帧复制数组）
+        if (!grid || grid.length === 0 || !grid[0]) return;
+
+        const tile = map.tileSize;
+        const renderPos = this.camera.getRenderPosition();
+        const startX = Math.max(0, Math.floor(renderPos.x / tile));
+        const startY = Math.max(0, Math.floor(renderPos.y / tile));
+        const endX = Math.min(grid[0].length - 1, Math.ceil((renderPos.x + this.camera.width) / tile));
+        const endY = Math.min(grid.length - 1, Math.ceil((renderPos.y + this.camera.height) / tile));
+
+        ctx.save();
+        ctx.lineWidth = 1;
+        for (let ty = startY; ty <= endY; ty++) {
+            for (let tx = startX; tx <= endX; tx++) {
+                const walkable = grid[ty] && grid[ty][tx];
+                const sx = tx * tile - renderPos.x;
+                const sy = ty * tile - renderPos.y;
+                ctx.fillStyle = walkable ? 'rgba(80, 255, 140, 0.12)' : 'rgba(255, 60, 60, 0.30)';
+                ctx.fillRect(sx, sy, tile, tile);
+                ctx.strokeStyle = walkable ? 'rgba(120, 255, 160, 0.20)' : 'rgba(255, 120, 120, 0.38)';
+                ctx.strokeRect(sx + 0.5, sy + 0.5, tile - 1, tile - 1);
+            }
+        }
+
+        // 信息行：地图 / 网格规格 / 玩家所在瓦片
+        const lines = [
+            `碰撞调试：${map.mapId}  ${map.mapWidth}×${map.mapHeight} 格 @ ${tile}px`,
+            '绿=可通行  红=阻挡   按 F2 关闭',
+        ];
+        if (this.player && this.player.position) {
+            const ptx = Math.floor(this.player.position.x / tile);
+            const pty = Math.floor(this.player.position.y / tile);
+            const ok = grid[pty] && grid[pty][ptx];
+            lines.push(`玩家瓦片 (${ptx},${pty}) ${ok ? '可通行' : '阻挡'}`
+                + `   世界 (${Math.round(this.player.position.x)}, ${Math.round(this.player.position.y)})`);
+        }
+
+        ctx.font = 'bold 13px Microsoft YaHei';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        let y = 12;
+        lines.forEach(line => {
+            const width = ctx.measureText(line).width + 16;
+            ctx.fillStyle = 'rgba(8, 12, 18, 0.72)';
+            ctx.fillRect(12, y, width, 20);
+            ctx.fillStyle = '#e8f4ff';
+            ctx.fillText(line, 20, y + 3);
+            y += 24;
+        });
+        ctx.restore();
     }
 
     /**

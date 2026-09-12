@@ -45,11 +45,27 @@ class ResourceManager {
                     //   skill_lingxidan —— U 灵息弹
                     //   skill_hutishu   —— I 护体术
                     //   skill_dodge     —— L 闪避
+                    //   skill_jianying  —— O 剑影连斩（第二章主线一「剑修基础连招试炼」传授，学会后才占格）
                     // 普通攻击（J）不占左下角技能栏，故没有对应图片；
                     // 缺图 / 尺寸不符时技能栏该格回退程序化方框（按键与倒计时照常绘制）
                     skill_lingxidan: 'assets/images/ui/skill_lingxidan.png',
                     skill_hutishu: 'assets/images/ui/skill_hutishu.png',
                     skill_dodge: 'assets/images/ui/skill_dodge.png',
+                    skill_jianying: 'assets/images/ui/skill_jianying.png',
+                    // 游戏开始界面（主菜单）：**没有任何程序化绘制**，整屏只有这两张贴图（见 js/MainMenuScene.js）
+                    //   start_screen —— 1280×720 整屏背景（开始界面整幅画面）
+                    //   start_button —— 400×112  开始按钮（画布正中显示，点击即开始游戏）
+                    // 生成 / 覆盖占位图：py -3 tools/generate_start_screen_assets.py
+                    // （默认不覆盖已存在的文件；正式美术按同尺寸替换即自动生效）
+                    start_screen: 'assets/images/ui/start_screen.png',
+                    start_button: 'assets/images/ui/start_button.png',
+                    // 游戏完结界面（章末二登船后的滚动字幕，见 js/EndingScene.js）：
+                    //   ending_bg —— 1280×720 整屏底图（画面中部请留白给滚动字幕）
+                    // 缺图 / 空图 / ResourceManager 品红占位图 → 该图不绘制，
+                    // 改回程序化「深墨渐变 + 渡口暖光晕」兜底，
+                    // 浮尘与四周暗角照常叠加（两种情况下字幕都保持可读）；
+                    // 生成 / 覆盖占位图：py -3 tools/generate_ending_assets.py
+                    ending_bg: 'assets/images/ui/ending_bg.png',
                 },
                 
                 // === 地图传送界面 ===
@@ -85,6 +101,8 @@ class ResourceManager {
                     boss_arena: 'assets/images/maps/boss_arena/bg.png',
                     // 主线四：摄风山魈战场（1280×720，与画布同尺寸）
                     boss_arena_ch1: 'assets/images/maps/boss_arena_ch1/bg.png',
+                    // 第二章：万灯台战场（1280×720）
+                    boss_arena_ch2: 'assets/images/maps/boss_arena_ch2/bg.png',
                 },
 
                 mapCollisions: {
@@ -95,6 +113,8 @@ class ResourceManager {
                     boss_arena: 'assets/images/maps/boss_arena/collision.png',
                     // 主线四战场碰撞图：白色可通行 / 黑色不可通行，1280×720
                     boss_arena_ch1: 'assets/images/maps/boss_arena_ch1/collision.png',
+                    // 第二章万灯台战场碰撞图：同上约定
+                    boss_arena_ch2: 'assets/images/maps/boss_arena_ch2/collision.png',
                 },
 
                 // === 主角动画精灵图 ===
@@ -168,10 +188,21 @@ class ResourceManager {
                     ayan_stand_idle: 'assets/images/npc/ayan/stand_idle.png',
                     zhoushu_idle: 'assets/images/npc/zhoushu/idle.png',
                     zhoushu_walk: 'assets/images/npc/zhoushu/walk.png',
+                    // 第二章 NPC：陆舟 / 江婆 / 江晚 / 陈栎 / 许录
+                    // （陆舟、江婆的键此前已登记；江晚 / 陈栎 / 许录为本章新增）
+                    // 规格：陆舟 / 江晚 单帧 32×64；陈栎 232×64（列排列 4 列 × 58×64）；
+                    //       许录 192×64（列排列 4 列 × 48×64）；江婆两张单帧 32×64（获救前 / 后）
                     luzhou_idle: 'assets/images/npc/luzhou/idle.png',
                     luzhou_walk: 'assets/images/npc/luzhou/walk.png',
                     jiangpo_idle: 'assets/images/npc/jiangpo/idle.png',
+                    jiangpo_idle_after: 'assets/images/npc/jiangpo/idle_after.png',
                     jiangpo_walk: 'assets/images/npc/jiangpo/walk.png',
+                    jiangwan_idle: 'assets/images/npc/jiangwan/idle.png',
+                    jiangwan_walk: 'assets/images/npc/jiangwan/walk.png',
+                    chenli_idle: 'assets/images/npc/chenli/idle.png',
+                    chenli_walk: 'assets/images/npc/chenli/walk.png',
+                    xulu_idle: 'assets/images/npc/xulu/idle.png',
+                    xulu_walk: 'assets/images/npc/xulu/walk.png',
                     wensheng_idle: 'assets/images/npc/wensheng/idle.png',
                     wensheng_walk: 'assets/images/npc/wensheng/walk.png',
                     zhiwei_idle: 'assets/images/npc/zhiwei/idle.png',
@@ -198,14 +229,22 @@ class ResourceManager {
                     boss_shanxiao_hurt: 'assets/images/monsters/boss_shanxiao/hurt.png',
                     boss_shanxiao_dead: 'assets/images/monsters/boss_shanxiao/dead.png',
                     
-                    // Boss - 渡厄使
-                    boss_due_walk: 'assets/images/monsters/boss_due/walk.png',
+                    // Boss - 渡厄使（第二章万灯台战场，js/DueBoss.js）
+                    // 规格：单帧 96×96。idle 为列排列（4 列 = 下/左/右/上，每列 1 帧 → 384×96）；
+                    //       summon / dash / control / hurt / move 为 4 行 × 6 帧 → 576×384；
+                    //       dead 为单行 6 帧 → 576×96。
                     boss_due_idle: 'assets/images/monsters/boss_due/idle.png',
-                    boss_due_attack: 'assets/images/monsters/boss_due/attack.png',
-                    boss_due_skill1: 'assets/images/monsters/boss_due/skill1.png',
-                    boss_due_skill2: 'assets/images/monsters/boss_due/skill2.png',
+                    boss_due_move: 'assets/images/monsters/boss_due/move.png',
+                    boss_due_dash: 'assets/images/monsters/boss_due/dash.png',
+                    boss_due_summon: 'assets/images/monsters/boss_due/summon.png',
+                    boss_due_control: 'assets/images/monsters/boss_due/control.png',
                     boss_due_hurt: 'assets/images/monsters/boss_due/hurt.png',
                     boss_due_dead: 'assets/images/monsters/boss_due/dead.png',
+                    // 渡厄使召唤的小兵（守台傀儡，js/DueBoss.js 的 DueMinion）
+                    // 规格：单帧 96×32（宽扁），4 行（下/左/右/上）；idle 6 帧 / move 8 帧 / attack 7 帧
+                    boss_due_minion_idle: 'assets/images/monsters/boss_due/minion_idle.png',
+                    boss_due_minion_move: 'assets/images/monsters/boss_due/minion_move.png',
+                    boss_due_minion_attack: 'assets/images/monsters/boss_due/minion_attack.png',
                     
                     // Boss - 丹霞真人
                     boss_danxia_walk: 'assets/images/monsters/boss_danxia/walk.png',
@@ -245,6 +284,14 @@ class ResourceManager {
                     zhenhe: 'assets/images/quest_items/zhenhe.png',
                     zhenfeng_heipian: 'assets/images/quest_items/zhenfeng_heipian.png',
                     lingcao: 'assets/images/quest_items/lingcao.png',
+                    // === 第二章剧情 / 任务物品 ===
+                    dengji_zhaie: 'assets/images/quest_items/dengji_zhaie.png',
+                    jiangwan_jiashu: 'assets/images/quest_items/jiangwan_jiashu.png',
+                    hundeng_jiangwan: 'assets/images/quest_items/hundeng_jiangwan.png',
+                    hundeng_chenli: 'assets/images/quest_items/hundeng_chenli.png',
+                    tongxing_pingzheng: 'assets/images/quest_items/tongxing_pingzheng.png',
+                    zhuanyun_zhangce: 'assets/images/quest_items/zhuanyun_zhangce.png',
+                    taixuan_mingling: 'assets/images/quest_items/taixuan_mingling.png',
                 },
                 
                 // === 技能特效 ===
@@ -301,11 +348,17 @@ class ResourceManager {
                 signposts: {
                     herb_collect: 'assets/images/signposts/herb_collect.png',
                     depart_boat: 'assets/images/signposts/depart_boat.png',
+                    // === 第二章路标 ===
+                    // 认灯台（认灯归魂入口）/ 旧水道（逆流行舟入口）；缺图时回退程序化木牌
+                    lantern_identify: 'assets/images/signposts/lantern_identify.png',
+                    river_escort: 'assets/images/signposts/river_escort.png',
                 },
 
                 // === 传送法阵（主线四：山口石台，静态图 96×96） ===
                 teleportArrays: {
                     boss_enter: 'assets/images/teleport_arrays/boss_enter.png',
+                    // 第二章：万灯台石台（同上规格 96×96）
+                    wandengtai: 'assets/images/teleport_arrays/wandengtai.png',
                 },
 
                 // === 镇风桩（青岚浮野调查点，58×128，每根桩图片不同） ===
@@ -313,6 +366,11 @@ class ResourceManager {
                     zhenfeng_pile_1: 'assets/images/wind_piles/zhenfeng_pile_1.png',
                     zhenfeng_pile_2: 'assets/images/wind_piles/zhenfeng_pile_2.png',
                     zhenfeng_pile_3: 'assets/images/wind_piles/zhenfeng_pile_3.png',
+                    // === 第二章调查点 ===
+                    // 引渡司核验栏（读线索）/ 台后石案（账册 / 命令）；缺图时回退程序化石桩
+                    verify_rack: 'assets/images/wind_piles/verify_rack.png',
+                    zhangce_stand: 'assets/images/wind_piles/zhangce_stand.png',
+                    mingling_stand: 'assets/images/wind_piles/mingling_stand.png',
                 },
                 // === 破损运灯箱（青岚浮野调查点，原图 64×58） ===
                 lanternBoxes: {
@@ -324,6 +382,8 @@ class ResourceManager {
                     boss_pounce_dust: 'assets/images/effects/boss_pounce_dust.png',
                     // 蓄力风旋：1 行 4 帧，单帧 48×48
                     boss_charge_wind: 'assets/images/effects/boss_charge_wind.png',
+                    // 渡厄使「控制」命中的锁链（玩家头顶，32×32 单帧；缺图时 PlayerCombat 程序化绘制锁链）
+                    boss_due_chain: 'assets/images/effects/boss_due_chain.png',
                     // === 主角战斗特效（PlayerCombatSystem；缺图时自动程序化绘制） ===
                     // 剑气：1 行 4 帧，单帧 128×108
                     player_sword_aura: 'assets/images/effects/player_sword_aura.png',
@@ -331,6 +391,10 @@ class ResourceManager {
                     player_lingxidan: 'assets/images/effects/player_lingxidan.png',
                     // 灵息弹命中：1 行 6 帧，单帧 48×48
                     player_lingxidan_hit: 'assets/images/effects/player_lingxidan_hit.png',
+                    // 剑气：4 行（右/左/下/上）× 6 帧，单帧 96×96，循环播放
+                    player_jianying: 'assets/images/effects/player_jianying.png',
+                    // 剑影连斩命中：以命中点为圆心的透明渐变扩大圆，1 行 6 帧，单帧 96×96
+                    player_jianying_hit: 'assets/images/effects/player_jianying_hit.png',
                     // 护体术气场：1 行 4 帧，单帧 48×64（角色之下、地图之上）
                     player_hutishu_aura: 'assets/images/effects/player_hutishu_aura.png',
                     // 闪避气场：1 行 4 帧，单帧 48×64（角色之下、地图之上）
@@ -350,14 +414,17 @@ class ResourceManager {
                     yinqi_bg: 'assets/images/minigame/yinqi/bg.png',
                     yinqi_circle: 'assets/images/minigame/yinqi/circle.png',
                     yinqi_dot: 'assets/images/minigame/yinqi/dot.png',
-                    // 逆流行舟
-                    xingzhou_bg: 'assets/images/minigame/xingzhou/bg.png',
-                    xingzhou_boat: 'assets/images/minigame/xingzhou/boat.png',
-                    xingzhou_rock: 'assets/images/minigame/xingzhou/rock.png',
-                    // 认灯归魂
+                    // 逆流送灯（横版行舟：小船横置朝右、只上下闪避，障碍自右向左；见 js/BoatNavigationMiniGame.js）
+                    xingzhou_bg: 'assets/images/minigame/xingzhou/bg.png',                    // 河道背景 1280×720
+                    xingzhou_boat: 'assets/images/minigame/xingzhou/boat.png',                // 小船朝右动画：单行 4 帧，单帧 128×104（整图 512×104）
+                    xingzhou_rock: 'assets/images/minigame/xingzhou/rock.png',                // 礁石：单帧 96×96
+                    xingzhou_wood: 'assets/images/minigame/xingzhou/wood.png',                // 浮木：单帧 96×96
+                    xingzhou_collision: 'assets/images/minigame/xingzhou/collision.png',      // 河道碰撞图 1280×720（白 = 可通行；取上下活动范围）
+                    // 认灯归魂（魂灯：暗 / 亮两张图，各 48×64；缺图 → 程序化魂灯）
                     rendeng_bg: 'assets/images/minigame/rendeng/bg.png',
-                    rendeng_deng: 'assets/images/minigame/rendeng/deng.png',
-                    rendeng_guang: 'assets/images/minigame/rendeng/guang.png',
+                    rendeng_deng_off: 'assets/images/minigame/rendeng/deng_off.png',
+                    rendeng_deng_on: 'assets/images/minigame/rendeng/deng_on.png',
+                    rendeng_collision: 'assets/images/minigame/rendeng/collision.png',        // 认灯台碰撞图 1280×720（白 = 可走 / 黑 = 阻挡，40px 瓦片）
                     // 忆片归序
                     yipian_bg: 'assets/images/minigame/yipian/bg.png',
                     yipian_card: 'assets/images/minigame/yipian/card.png',
@@ -425,7 +492,25 @@ class ResourceManager {
         //       供 preloadResourceGroup / releaseResourceGroup / getResourceGroupImagePaths 使用，
         //       避免各调用处重复硬编码文件列表（新增资源只需在这里补一行）
         this.resourceGroups = {
-            // 主角战斗系统：剑气 / 灵息弹 / 命中 / 护体术气场 / 闪避气场 / 气血条 / 灵息条（进入游戏前预加载）
+            // 游戏开始界面（主菜单）：整屏背景 + 居中开始按钮，启动时预加载
+            // （见 js/MainMenuScene.js；缺图时不画兜底图形，补图刷新即生效）
+            mainMenu: {
+                images: [
+                    'ui.start_screen',
+                    'ui.start_button',
+                ],
+                audio: [],
+            },
+            // 游戏完结界面（章末二登船后的滚动字幕）：整屏背景底图，启动时随主菜单一起预加载
+            // （见 js/EndingScene.js；缺图时改回程序化「深墨渐变 + 渡口暖光晕」，不影响播放）
+            ending: {
+                images: [
+                    'ui.ending_bg',
+                ],
+                audio: [],
+            },
+            // 主角战斗系统：剑气 / 灵息弹 / 命中 / 剑气（剑影连斩）/ 护体术气场 / 闪避气场 /
+            // 气血条 / 灵息条 / 技能栏图标（进入游戏前预加载）
             playerCombat: {
                 images: [
                     'player.sanxiu_idle',
@@ -435,6 +520,8 @@ class ResourceManager {
                     'effects.player_sword_aura',
                     'effects.player_lingxidan',
                     'effects.player_lingxidan_hit',
+                    'effects.player_jianying',
+                    'effects.player_jianying_hit',
                     'effects.player_hutishu_aura',
                     'effects.player_dodge_aura',
                     // HUD 资源条：气血条 / 灵息条（外框 500×64 + 内条 454×64）
@@ -442,11 +529,12 @@ class ResourceManager {
                     'ui.health_bar_fill',
                     'ui.mana_bar_bg',
                     'ui.mana_bar_fill',
-                    // 左下角技能栏图标：U 灵息弹 / I 护体术 / L 闪避（规格 100×100）
-                    // 普通攻击（J）不占技能栏，故没有对应图标
+                    // 左下角技能栏图标：U 灵息弹 / I 护体术 / L 闪避 / O 剑影连斩（规格 100×100）
+                    // 普通攻击（J）不占技能栏，故没有对应图标；剑影连斩学会后才补出第 4 格
                     'ui.skill_lingxidan',
                     'ui.skill_hutishu',
                     'ui.skill_dodge',
+                    'ui.skill_jianying',
                 ],
                 audio: [],
             },
@@ -465,6 +553,26 @@ class ResourceManager {
                     // 战斗特效：扑击落地扬尘 / 蓄力风旋
                     'effects.boss_pounce_dust',
                     'effects.boss_charge_wind',
+                ],
+                audio: [],
+            },
+            // 第二章：万灯台战场（渡厄使 + 其召唤的小兵 + 控制锁链）
+            // 进入战场前预加载；战斗结束时由 DueBoss.destroy() 释放，保证二次进场动画完整
+            bossArenaCh2: {
+                images: [
+                    'monsters.boss_due_idle',
+                    'monsters.boss_due_move',
+                    'monsters.boss_due_dash',
+                    'monsters.boss_due_summon',
+                    'monsters.boss_due_control',
+                    'monsters.boss_due_hurt',
+                    'monsters.boss_due_dead',
+                    // 召唤出的小兵（3 套动作，随 Boss 一起预加载）
+                    'monsters.boss_due_minion_idle',
+                    'monsters.boss_due_minion_move',
+                    'monsters.boss_due_minion_attack',
+                    // 控制技：玩家头顶的锁链图（32×32）
+                    'effects.boss_due_chain',
                 ],
                 audio: [],
             },

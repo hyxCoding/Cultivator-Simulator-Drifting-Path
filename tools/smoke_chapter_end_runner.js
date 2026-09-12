@@ -204,11 +204,17 @@
         buttons: [],
     };
     const mapTeleportCalls = [];
+    // 世界地图按钮解锁状态单独记录：不能混进 mapTeleportCalls，
+    // 否则会干扰“调息序列中键盘锁定（mapTeleportCalls 为空）”的断言
+    const worldMapUnlockCalls = [];
     main.mapTeleport = {
         isVisible: false,
         show() { this.isVisible = true; mapTeleportCalls.push('show'); },
         hide() { this.isVisible = false; mapTeleportCalls.push('hide'); },
-        toggle() { mapTeleportCalls.push('toggle'); },
+        // M 键 → toggle：与真实 MapTeleport 一致，开关同时切换 isVisible
+        toggle() { mapTeleportCalls.push('toggle'); this.isVisible = !this.isVisible; },
+        // 真实 MapTeleport 的按钮接口（Main.updateWorldMapUnlocks 会调用）
+        setButtonEnabled(id, enabled) { worldMapUnlockCalls.push(id + '=' + enabled); },
     };
     const questUICalls = [];
     main.questUI = {
@@ -462,11 +468,39 @@
     };
     main.player.questSystem = playerQuestSystem;
 
-    // ---- 世界地图不再由 M 键打开 ----
+    // ---- 调试期：M 键重新用于打开 / 关闭世界地图（前两章传送按钮常开）----
+    // 前置状态清零：若无对话 / 剧情对白 / 任务栏打开，handleKeyDown 会按规则 1/1b/2 提前返回
     mapTeleportCalls.length = 0;
     main.isFoundationTrialPlaying = false;
+    main.isCoreTrialPlaying = false;
+    main.storyDialogueActive = false;
+    main.dialogBox.isVisible = false;
+    main.questUI.isVisible = false;
+    main.mapTeleport.isVisible = false;
     main.handleKeyDown('m', {});
-    results.mKeyCalls = mapTeleportCalls.slice();
+    const mKeyOpenCalls = mapTeleportCalls.slice();
+    const mKeyOpenedVisible = main.mapTeleport.isVisible === true;
+    main.handleKeyDown('m', {});
+    results.mKey = {
+        openCalls: mKeyOpenCalls,
+        opened: mKeyOpenCalls.length === 1 && mKeyOpenedVisible,
+        closeCalls: mapTeleportCalls.slice(),
+        closed: main.mapTeleport.isVisible === false,
+    };
+    results.worldMapUnlockCalls = worldMapUnlockCalls.slice();
+
+    // ---- 战场内按 M 不开图：世界地图打开时战场胜负 / 死亡处理会停摆，而 Boss 仍在攻击 ----
+    const savedMapForArenaCheck = main.currentMap;
+    main.currentMap = {
+        mapId: main.bossArenaMapId, mapConfig: {}, npcs: new Map(), signposts: new Map(),
+    };
+    mapTeleportCalls.length = 0;
+    main.handleKeyDown('m', {});
+    results.mKeyBlockedInArena = {
+        calls: mapTeleportCalls.slice(),
+        opened: main.mapTeleport.isVisible === true,
+    };
+    main.currentMap = savedMapForArenaCheck;
 
     // ---- 世界地图打开时：画面只保留世界地图本身（交互提示 / HUD / 任务栏都不渲染） ----
     const overlaySignpost = mapStub.signposts.get('signpost_depart_boat');
@@ -725,6 +759,12 @@
     results.training.attackCallsOffCircle = trainingAttackCalls;
     results.training.toastOffCircle = trainingCombat.toast.text;
 
+    // 教学期按 O（剑影连斩）：本次试炼没有这个动作 → 完全静默（不弹"先走到教学圈"提示）
+    trainingCombat.toast.text = '';
+    trainingCombat.toast.timer = 0;
+    trainingCombat.update(0.016, { pressedKeys: { o: true } });
+    results.training.jianyingToastDuringTraining = trainingCombat.toast.text;
+
     // 回到教学圈内按 J：施展成功 → 完成该步骤 → 左下角出现 J 格（含冷却提示）
     trainingPlayer.position = trainingZonePos('attack');
     trainingProbe.update(0.016, trainingPlayer);
@@ -860,6 +900,7 @@
         lingxidan: { width: 100, height: 100, tag: 'icon_lingxidan' },
         hutishu: { width: 100, height: 100, tag: 'icon_hutishu' },
         dodge: { width: 100, height: 100, tag: 'icon_dodge' },
+        jianying: { width: 100, height: 100, tag: 'icon_jianying' },
         wrongSize: { width: 64, height: 64, tag: 'icon_wrong_size' },
     };
     const setSkillIcons = (overrides) => {
@@ -920,6 +961,7 @@
             lingxidan: resourceManager.getImagePath(trainingCombat.config.lingxidan.hudIcon),
             hutishu: resourceManager.getImagePath(trainingCombat.config.hutishu.hudIcon),
             dodge: resourceManager.getImagePath(trainingCombat.config.dodge.hudIcon),
+            jianying: resourceManager.getImagePath(trainingCombat.config.jianying.hudIcon),
         },
         pathsInPreloadGroup: resourceManager.getResourceGroupImagePaths
             ? resourceManager.getResourceGroupImagePaths('playerCombat')
@@ -955,6 +997,19 @@
     results.skillBar.lingxidanCooldownToast = {
         blocked: trainingCombat.tryCastLingxidan() === false,
         toastText: trainingCombat.toast.text,
+    };
+
+    // 剑影连斩（O）：未习得时技能栏完全不画这一格；习得（职业系统等级 1）后补出第 4 格 100×100
+    results.skillBar.jianyingSlot = {
+        orderIndex: skillBarOrder.indexOf('jianying'),
+        // 未习得：上面的 ready / cooling / missingIcons 探针里都没有第 4 格
+        hiddenDrawCount: results.skillBar.ready.draws.length,
+        learned: (function () {
+            trainingPlayer.professionSystem.getSkillLevel = (id) => (id === 'jianying' ? 1 : 0);
+            const probe = renderSkillBarProbe({ jianying: 0 }, null);
+            delete trainingPlayer.professionSystem.getSkillLevel;
+            return probe;
+        })(),
     };
 
     // ---- Boss 战场：首次生成 / 击败后不再生成 + 正中心永久归途法阵 + 无 10 秒自动回城 ----
@@ -1121,7 +1176,18 @@
             walkable: flatTable.split('').filter(c => c === '.').length,
             blocked: flatTable.split('').filter(c => c === '#').length,
             spawnTileWalkable: qinglanTable[43][14] === '.',
-            houseTileBlocked: qinglanTable[33][52] === '#',
+            // 房屋墙体采样：祁伯住处（瓦片 48..53 × 28..31）整块必须是阻挡。
+            // 2026-09-12 重绘 collision.png 后，原先采样的单点 (52,33) 已改成通行（屋前空地被让开），
+            // 单点采样过脆 → 改为“整块墙体”判定，同时保留该点的实际取值便于排查
+            houseWallBlocked: (function () {
+                for (let y = 28; y <= 31; y++) {
+                    for (let x = 48; x <= 53; x++) {
+                        if (qinglanTable[y][x] !== '#') return false;
+                    }
+                }
+                return true;
+            })(),
+            houseFrontTileWalkable: qinglanTable[33][52] === '.',
             qiboTileWalkable: qinglanTable[31][58] === '.',
             outerFrameBlocked: qinglanTable[58].indexOf('.') === -1
                 && qinglanTable.every(row => row[0] === '#' && row[104] === '#'),
@@ -1129,7 +1195,8 @@
         // 真实 TileSystem / GameMap：碰撞图缺失时按 collisionData 建表
         viaRealCode: {
             spawnWalkable: qinglanMap.isPositionWalkable(448, 1376),
-            houseBlocked: qinglanMap.isPositionWalkable(52 * 32 + 16, 33 * 32 + 16) === false,
+            // 房屋墙体瓦片 (52,30) → 世界坐标 (52×32+16, 30×32+16)
+            houseBlocked: qinglanMap.isPositionWalkable(52 * 32 + 16, 30 * 32 + 16) === false,
             rectAtSpawnWalkable: qinglanMap.isRectWalkable(qinglanPlayer.getCollisionRect(448, 1376)),
             gridShape: (function () {
                 const g = qinglanMap.tileSystem.getWalkableGrid();
@@ -1163,6 +1230,542 @@
                 .filter(p => !p.reachable).map(p => p.name),
         },
     };
+
+    // ============ 世界地图（M 键 + 前两章传送按钮 + 频繁传送） ============
+    // ---- 1) 世界地图配置：只保留前两章的传送按钮，且两个按钮都已解锁 ----
+    const worldMapConfig = gameConfig.getMap('worldMap');
+    const wmButtons = (worldMapConfig && worldMapConfig.buttons) || [];
+    results.worldMap = {
+        ids: wmButtons.map(b => b.id),
+        targets: wmButtons.map(b => b.targetMap),
+        unlocked: wmButtons.map(b => b.unlocked !== false),
+        zhaochenRegistered: !!gameConfig.getMap('zhaochen_xiancheng'),
+        wuxiangRegistered: !!gameConfig.getMap('wuxiang_tianque'),
+    };
+
+    // ---- 2) 频繁传送：另一张地图静默（不更新 / 不渲染），但实例与资源不释放 ----
+    chapterLoader.registerChapter(Chapter2Config.getAll());   // 云渡泽（本章测试用到的第二张地图）
+    const rm = ResourceManager.getInstance();
+    const savedLoadImage = rm.loadImage;
+    // 碰撞图返回 null → TileSystem 走地图配置里的 collisionData（测试环境不读像素）
+    rm.loadImage = async (key) => (String(key).indexOf('mapCollisions.') === 0 ? null : { width: 1, height: 1 });
+
+    const mm = new MapManager();
+    const qinglanFirst = await mm.switchMap('qinglan_fuye');
+    const qinglanActiveWhileCurrent = qinglanFirst ? qinglanFirst.isActive === true : null;
+    const yunduzeFirst = await mm.switchMap('yunduze');
+    const yunduzeActiveWhileCurrent = yunduzeFirst ? yunduzeFirst.isActive === true : null;
+    const qinglanSilentWhenOther = qinglanFirst ? qinglanFirst.isActive === false : null;
+
+    // 静默校验：非活动地图的 render 必须一个绘制调用都不产生
+    // （用 Proxy 代理 ctx —— 只要代码碰了 ctx 任何属性就会被计数）
+    let silentMapDraws = 0;
+    const silentCtxProbe = new Proxy({}, { get: () => (() => { silentMapDraws++; }) });
+    if (qinglanFirst) {
+        qinglanFirst.render(silentCtxProbe, { x: 0, y: 0, width: 1280, height: 720 });
+    }
+
+    const qinglanAgain = await mm.switchMap('qinglan_fuye');
+    results.fastTravel = {
+        instanceCount: mm.maps.size,
+        qinglanActiveWhileCurrent: qinglanActiveWhileCurrent,
+        yunduzeActiveWhileCurrent: yunduzeActiveWhileCurrent,
+        qinglanSilentWhenOther: qinglanSilentWhenOther,
+        yunduzeSilentAfterLeaving: yunduzeFirst ? yunduzeFirst.isActive === false : null,
+        silentMapDraws: silentMapDraws,
+        sameInstanceReused: qinglanAgain === qinglanFirst && mm.getMap('yunduze') === yunduzeFirst,
+        currentMapId: mm.currentMap ? mm.currentMap.mapId : null,
+    };
+    // ---- 3) 世界地图传送落点：固定坐标必须可站（真实 GameMap + Player 24×24 碰撞盒） ----
+    const spawnTable = main.worldMapSpawnPoints || {};
+    const spawnProbePlayer = new Player({ position: { x: 0, y: 0 } });
+    results.worldMapSpawn = {};
+    for (const mapId of ['qinglan_fuye', 'yunduze']) {
+        const mapInst = mm.getMap(mapId);
+        const sp = spawnTable[mapId] || null;
+        results.worldMapSpawn[mapId] = {
+            spawn: sp,
+            hasMap: !!mapInst,
+            tile: mapInst && sp ? mapInst.worldToTile(sp.x, sp.y) : null,
+            // 四角判定与 Player.checkCollision 完全一致
+            standable: !!(mapInst && sp
+                && mapInst.isRectWalkable(spawnProbePlayer.getCollisionRect(sp.x, sp.y))),
+            insideBounds: !!(mapInst && sp
+                && sp.x > 0 && sp.y > 0
+                && sp.x < mapInst.mapWidth * mapInst.tileSize
+                && sp.y < mapInst.mapHeight * mapInst.tileSize),
+        };
+    }
+
+    // ---- 4) 任务栏（QuestUI）排版：标题在 padding.top 基础上再下移 20px + 每行最多 280px 自动换行 ----
+    results.questUILayout = (() => {
+        const CHAR_PX = 20;      // 桩字体：每字 20px（280px → 14 字/行），便于精确断言换行位置
+        const drawn = [];
+        const ctx = {
+            fillText(text, x, y) {
+                drawn.push({ text: String(text), x: x, y: y, width: String(text).length * CHAR_PX });
+            },
+            strokeText(text, x, y) {
+                drawn.push({ text: String(text), x: x, y: y, width: String(text).length * CHAR_PX });
+            },
+            measureText: t => ({ width: String(t).length * CHAR_PX }),
+            save() {}, restore() {}, fillRect() {}, strokeRect() {}, drawImage() {},
+            createLinearGradient: () => ({ addColorStop() {} }),
+            createRadialGradient: () => ({ addColorStop() {} }),
+        };
+        // 超长标题 / 超长描述 / 超长目标：三者都必须按 280px 换行
+        const longQuest = {
+            type: 'side',
+            order: 1,
+            title: '主线标题很长很长很长很长很长很长很长很长很长',
+            description: '这是一段很长的任务描述文字用来验证每行最多四百像素之后会自动换行',
+        };
+        const savedGetInstance = GameConfig.getInstance;
+        GameConfig.getInstance = () => ({ getQuest: id => (id === 'smoke_quest_ui' ? longQuest : null) });
+        const ui = new QuestUI({ x: 400, y: 120, width: 480, height: 480 });
+        ui.setQuestSystem({
+            getCompletedQuests: () => new Map([['smoke_quest_ui', {
+                objectives: [{ description: longQuest.description, progress: 1, count: 1, completed: true }],
+            }]]),
+            getActiveQuests: () => new Map(),
+        });
+        ui.show();
+        ui.render(ctx);
+        GameConfig.getInstance = savedGetInstance;
+
+        const titleLine = drawn.find(item => item.text === '任  务  记  录') || null;
+        const leftX = ui.x + ui.padding.left + 90;
+        // 「按 Q 或 ESC 关闭」是面板右下角右对齐的关闭提示（x = 面板右内边距），
+        // 不属于 280px 的文字块，比较右边界时排除它
+        const CLOSE_HINT = '按 Q 或 ESC 关闭';
+        return {
+            maxLineWidth: ui.maxLineWidth,
+            titleOffsetY: ui.titleOffsetY,
+            continuationIndent: ui.continuationIndent,
+            title: titleLine,
+            leftX: leftX,
+            lineHeight: ui.lineHeight,
+            lineCount: drawn.length,
+            maxWidth: drawn.reduce((m, item) => Math.max(m, item.width), 0),
+            overLimit: drawn.filter(item => item.width > ui.maxLineWidth).map(item => item.text),
+            overflowRight: drawn
+                .filter(item => item.text !== CLOSE_HINT && item.x > leftX + ui.maxLineWidth + 0.01)
+                .map(item => item.text),
+            indentedContinuations: drawn.filter(item => item.x === leftX + ui.continuationIndent).length,
+            closeHint: drawn.find(item => item.text === CLOSE_HINT) || null,
+            lines: drawn.map(item => ({ text: item.text, x: item.x, y: item.y })),
+        };
+    })();
+
+    // ---- 5) 开始界面：取消全部程序化绘制，改为整屏背景图 + 居中开始按钮图 ----
+    //       js/MainMenuScene.js 只贴两张图：ui.start_screen（1280×720）与 ui.start_button（400×112，居中）
+    results.startScreen = (() => {
+        const makeRecorder = () => {
+            const rec = { images: [], texts: [], rects: [] };
+            rec.ctx = {
+                drawImage: (...a) => rec.images.push(a),
+                fillText: t => rec.texts.push(t),
+                strokeText: t => rec.texts.push(t),
+                fillRect: (...a) => rec.rects.push(a),
+                strokeRect: (...a) => rec.rects.push(a),
+                measureText: t => ({ width: String(t).length * 8 }),
+                save() {}, restore() {}, beginPath() {}, stroke() {}, fill() {},
+                createLinearGradient: () => ({ addColorStop() {} }),
+                createRadialGradient: () => ({ addColorStop() {} }),
+            };
+            return rec;
+        };
+
+        // 真实美术（文件路径 + 规定尺寸）与 ResourceManager 缺图占位图（dataURL 32×32）
+        const screenImage = { src: 'assets/images/ui/start_screen.png', width: 1280, height: 720 };
+        const buttonImage = { src: 'assets/images/ui/start_button.png', width: 400, height: 112 };
+        const placeholder = { src: 'data:image/png;base64,iVBORw0KGgo=', width: 32, height: 32 };
+
+        const makeMain = (cache) => {
+            const switches = [];
+            const mainStub = {
+                canvas: { width: 1280, height: 720, style: {} },
+                resourceManager: { getCachedImage: key => cache[key] || null },
+                sceneManager: { switchScene: id => switches.push(id) },
+            };
+            return { mainStub: mainStub, switches: switches };
+        };
+
+        const withArtSet = makeMain({ 'ui.start_screen': screenImage, 'ui.start_button': buttonImage });
+        const scene = new MainMenuScene(withArtSet.mainStub);
+        scene.enter();
+        const artRec = makeRecorder();
+        scene.render(artRec.ctx);
+
+        // 悬停按钮 → 手型光标（只切 DOM 光标，不绘制任何图形）
+        scene.update(0.016, { mouseX: 640, mouseY: 360, mouseClicked: false, pressedKeys: {} });
+        const cursorWhenHover = withArtSet.mainStub.canvas.style.cursor;
+        scene.update(0.016, { mouseX: 10, mouseY: 10, mouseClicked: false, pressedKeys: {} });
+        const cursorAfterLeave = withArtSet.mainStub.canvas.style.cursor;
+
+        // 点击按钮正中 → 开始游戏
+        scene.update(0.016, { mouseX: 640, mouseY: 360, mouseClicked: true, pressedKeys: { j: true } });
+        const startedByInsideClick = withArtSet.switches.slice();
+        scene.update(0.016, { mouseX: 640, mouseY: 360, mouseClicked: true, pressedKeys: {} });
+        const switchesAfterRepeatClick = withArtSet.switches.slice();
+
+        // 按钮外点击 / 只按键盘 → 都不开始（旧版是“键盘任意键 + 画面任意处点击”）
+        const outsideSet = makeMain({ 'ui.start_screen': screenImage, 'ui.start_button': buttonImage });
+        const sceneOutside = new MainMenuScene(outsideSet.mainStub);
+        sceneOutside.enter();
+        sceneOutside.update(0.016, { mouseX: 100, mouseY: 100, mouseClicked: true, pressedKeys: {} });
+        sceneOutside.update(0.016, { mouseX: 640, mouseY: 360, mouseClicked: false, pressedKeys: { j: true } });
+        sceneOutside.update(0.016, { mouseX: 0, mouseY: 0, mouseClicked: false, pressedKeys: { enter: true } });
+        const ignoredOutside = outsideSet.switches.slice();
+
+        // 缺图（dataURL 占位图）→ 只铺底色，不画品红占位块、不写字
+        const noArtSet = makeMain({ 'ui.start_screen': placeholder, 'ui.start_button': placeholder });
+        const sceneNoArt = new MainMenuScene(noArtSet.mainStub);
+        sceneNoArt.enter();
+        const noArtRec = makeRecorder();
+        sceneNoArt.render(noArtRec.ctx);
+
+        // 资源登记 / 预加载分组
+        const rm = ResourceManager.getInstance();
+
+        return {
+            keys: { background: scene.backgroundKey, button: scene.buttonKey },
+            resourcePaths: {
+                background: rm.getImagePath('ui.start_screen'),
+                button: rm.getImagePath('ui.start_button'),
+            },
+            pathsInPreloadGroup: rm.getResourceGroupImagePaths
+                ? rm.getResourceGroupImagePaths('mainMenu')
+                : [],
+            hasImages: !!scene.backgroundImage && !!scene.buttonImage,
+            buttonRect: {
+                x: scene.buttonX, y: scene.buttonY,
+                width: scene.buttonWidth, height: scene.buttonHeight,
+            },
+            insideRect: scene.containsButtonPoint(640, 360)
+                && scene.containsButtonPoint(440, 304)
+                && scene.containsButtonPoint(840, 416),
+            outsideRect: !scene.containsButtonPoint(439, 303) && !scene.containsButtonPoint(841, 417),
+            artRender: {
+                imageCount: artRec.images.length,
+                backgroundTargetIsScreenImage: !!artRec.images[0] && artRec.images[0][0] === screenImage,
+                backgroundRect: artRec.images[0] ? artRec.images[0].slice(1) : null,
+                buttonTargetIsButtonImage: !!artRec.images[1] && artRec.images[1][0] === buttonImage,
+                buttonRect: artRec.images[1] ? artRec.images[1].slice(1) : null,
+                textCount: artRec.texts.length,
+                rectCount: artRec.rects.length,
+            },
+            noArtRender: {
+                imageCount: noArtRec.images.length,
+                rectCount: noArtRec.rects.length,
+                textCount: noArtRec.texts.length,
+            },
+            startedByInsideClick: startedByInsideClick,
+            switchesAfterRepeatClick: switchesAfterRepeatClick,
+            ignoredOutside: ignoredOutside,
+            cursorWhenHover: cursorWhenHover,
+            cursorAfterLeave: cursorAfterLeave,
+            placeholderIsDataUrl: String(placeholder.src).startsWith('data:'),
+            sceneNoArtImages: { background: sceneNoArt.backgroundImage, button: sceneNoArt.buttonImage },
+        };
+    })();
+
+    rm.loadImage = savedLoadImage;
+
+    // ---- 6) 游戏完结界面（章末二登船后的滚动字幕）----
+    //      js/EndingText.js（字幕文案，由 tools/generate_ending_text.py 生成）
+    //      js/EndingScene.js（从屏幕底部逐行上滚 / 每行居中 / 末行滚出后提示 / 任意键返回世界地图）
+    results.gameEnding = (() => {
+        const lines = EndingText.getLines();
+        const limit = EndingText.getLineLimit();
+
+        // 录制画布：记录落到画布上的每一段文字，用于校验「水平居中 / 提示出现在屏幕正中」
+        const makeRecordingCtx = () => {
+            const rec = { texts: [] };
+            rec.ctx = new Proxy({
+                canvas: { width: 1280, height: 720 },
+                measureText: (t) => ({ width: String(t).length * 8 }),
+                fillText: (t, x, y) => rec.texts.push({ text: t, x: x, y: y }),
+                createLinearGradient: () => ({ addColorStop() {} }),
+                createRadialGradient: () => ({ addColorStop() {} }),
+            }, {
+                get: (target, prop) => (prop in target ? target[prop] : () => {}),
+                set: (target, prop, value) => { target[prop] = value; return true; },
+            });
+            return rec;
+        };
+        const emptyInput = { pressedKeys: {}, keys: {}, mouseX: 0, mouseY: 0, mouseClicked: false };
+
+        // ---- 6.1 完结界面的键盘屏蔽（Main.handleKeyDown 对 'ending' 场景直接 return）----
+        const switches = [];
+        main.sceneManager = {
+            getCurrentScene: () => ({ sceneId: 'ending' }),
+            switchScene: (id) => switches.push(id),
+        };
+        main.mapTeleport.isVisible = false;
+        const questCallsBefore = questUICalls.length;
+        const mapCallsBefore = mapTeleportCalls.length;
+        main.handleKeyDown('q', {});
+        main.handleKeyDown('m', {});
+        main.handleKeyDown('escape', {});
+        main.handleKeyDown('f2', {});
+        const keyboardSwallowed = questUICalls.length === questCallsBefore
+            && mapTeleportCalls.length === mapCallsBefore;
+
+        // ---- 6.2 滚动：整段从屏幕底部进入 → 逐行上滚 ----
+        const scene = new EndingScene(main);
+        scene.enter({ speed: 20000 });   // 回归速度：整段 ≈ 0.83 秒
+        const enterState = {
+            offset: scene.scrollOffset,
+            finished: scene.isFinished === true,
+            movementBlocked: main.inputManager.getInputState().movementBlocked === true,
+            inputBlocked: main.inputManager.inputBlocked === true,
+        };
+        const beforeFinishRec = makeRecordingCtx();
+        scene.render(beforeFinishRec.ctx);
+        const promptBeforeFinish = beforeFinishRec.texts.filter(t => t.text === scene.promptText).length;
+
+        // 播放中按任意键 / 点鼠标都不退出（不能跳过字幕）
+        scene.update(0.02, { pressedKeys: { j: true }, keys: { j: true }, mouseClicked: true });
+        const switchesWhileScrolling = switches.slice();
+
+        // 行距恒定（空行同样占位）+ 同一行随时间上移
+        const firstLineYBefore = scene.getLineY(0);
+        const linePitch = [scene.getLineY(1) - scene.getLineY(0), scene.getLineY(2) - scene.getLineY(1)];
+        scene.update(0.05, emptyInput);
+        const firstLineDelta = firstLineYBefore - scene.getLineY(0);
+
+        // 屏幕中段的字幕：录制每行的绘制 x，校验「每行水平居中」
+        // （逐字绘制 → 先按 y 分组成整行；行宽 = 字数 × 8 + 6px 字距 × (字数 - 1)，
+        //   居中后首字 x = (1280 - 行宽) / 2）
+        const groupByLine = (list) => {
+            const map = {};
+            for (const item of list) {
+                const key = String(item.y);
+                if (!map[key]) map[key] = [];
+                map[key].push(item);
+            }
+            return Object.keys(map).map(k => ({ y: Number(k), chars: map[k] }));
+        };
+        const midRec = makeRecordingCtx();
+        scene.render(midRec.ctx);
+        const midGroups = groupByLine(midRec.texts.filter(t => t.text !== scene.promptText));
+        const midCenteredCount = midGroups.filter(g => {
+            const lineText = g.chars.map(t => t.text).join('');
+            const width = lineText.length * 8 + 6 * Math.max(0, lineText.length - 1);
+            return Math.abs(g.chars[0].x - (1280 - width) / 2) < 0.001;
+        }).length;
+
+        // 一直播到整段滚完（最后一行完全滚出屏幕上方）
+        let guard = 0;
+        let elapsed = 0;
+        while (!scene.isFinished && guard++ < 400) {
+            scene.update(0.05, emptyInput);
+            elapsed += 0.05;
+        }
+        const finishedState = {
+            finished: scene.isFinished === true,
+            elapsed: Number(elapsed.toFixed(2)),
+            lastLineY: Number(scene.getLineY(lines.length - 1).toFixed(2)),
+            noSwitchYet: switches.length === switchesWhileScrolling.length,
+        };
+
+        // ---- 6.3 提示：屏幕正中「按任意键返回游戏」；最后一行已滚出屏幕 ----
+        scene.update(0.5, emptyInput);   // 提示淡入
+        const promptRec = makeRecordingCtx();
+        scene.render(promptRec.ctx);
+        const promptDraws = promptRec.texts.filter(t => t.text === scene.promptText);
+        const drawnLines = promptRec.texts.filter(t => t.text !== scene.promptText);
+
+        // ---- 6.4 任意键退出：记标记 + 打开世界地图 + 切回 gameWorld ----
+        const mapCallsBeforeExit = mapTeleportCalls.length;
+        scene.update(0.016, { pressedKeys: { escape: true }, keys: {}, mouseClicked: false });
+        const keyExit = {
+            dismissed: scene.isDismissed === true,
+            switches: switches.slice(),
+            flag: qsMain.hasStoryFlag('game_ending_seen'),
+            mapShown: mapTeleportCalls.slice(mapCallsBeforeExit).join(','),
+            mapVisible: main.mapTeleport.isVisible === true,
+        };
+        scene.exit();
+        const afterExit = {
+            movementBlocked: main.inputManager.getInputState().movementBlocked === true,
+            inputBlocked: main.inputManager.inputBlocked === true,
+            interacting: main.player.isInteracting === true,
+        };
+
+        // ---- 6.5 鼠标任意键同样可退出（新开一个场景从头播到提示）----
+        switches.length = 0;
+        const sceneMouse = new EndingScene(main);
+        sceneMouse.enter({ speed: 20000 });
+        let mouseGuard = 0;
+        while (!sceneMouse.isFinished && mouseGuard++ < 400) sceneMouse.update(0.05, emptyInput);
+        sceneMouse.update(0.5, emptyInput);
+        const switchesBeforeMouse = switches.length;
+        sceneMouse.update(0.016, { pressedKeys: {}, keys: {}, mouseClicked: true });
+        const mouseExit = {
+            switchesBefore: switchesBeforeMouse,
+            switches: switches.slice(),
+            dismissed: sceneMouse.isDismissed === true,
+        };
+        sceneMouse.exit();
+
+        // ---- 6.7 背景底图（可选美术 ui.ending_bg）：有图 → 整屏贴图铺底；
+        //      缺图 / 空图 / ResourceManager 的 dataURL 品红占位图 → 一张图都不画，
+        //      改回程序化「深墨渐变 + 渡口暖光晕」兜底（约定与 MainMenuScene / Signpost 一致）。
+        //      两种情况下浮尘与暗角都照常叠加，故「缺图」比「有图」正好多画 2 个垫底矩形。
+        const makeBackdropRecorder = () => {
+            const rec = { images: [], rects: [] };
+            rec.ctx = {
+                drawImage: (...a) => rec.images.push(a),
+                fillRect: (...a) => rec.rects.push(a),
+                strokeRect: (...a) => rec.rects.push(a),
+                fillText() {}, strokeText() {},
+                measureText: t => ({ width: String(t).length * 8 }),
+                save() {}, restore() {}, beginPath() {}, stroke() {}, fill() {},
+                createLinearGradient: () => ({ addColorStop() {} }),
+                createRadialGradient: () => ({ addColorStop() {} }),
+            };
+            return rec;
+        };
+        const endingBgImage = { src: 'assets/images/ui/ending_bg.png', width: 1280, height: 720 };
+        const endingBgPlaceholder = { src: 'data:image/png;base64,iVBORw0KGgo=', width: 32, height: 32 };
+        const backdropRm = ResourceManager.getInstance();
+        const savedResourceManager = main.resourceManager;
+        const renderBackdrop = (image) => {
+            main.resourceManager = { getCachedImage: key => (key === 'ui.ending_bg' ? image : null) };
+            const probe = new EndingScene(main);
+            probe.enter({ speed: 20000 });
+            const rec = makeBackdropRecorder();
+            probe.render(rec.ctx);
+            probe.exit();
+            return { probe: probe, rec: rec };
+        };
+        const artBackdrop = renderBackdrop(endingBgImage);
+        const placeholderBackdrop = renderBackdrop(endingBgPlaceholder);
+        const missingBackdrop = renderBackdrop(null);
+        main.resourceManager = savedResourceManager;
+        const backdrop = {
+            key: artBackdrop.probe.backgroundKey,
+            resourcePath: backdropRm.getImagePath('ui.ending_bg'),
+            groupPaths: typeof backdropRm.getResourceGroupImagePaths === 'function'
+                ? backdropRm.getResourceGroupImagePaths('ending')
+                : [],
+            loadedWithArt: !!artBackdrop.probe.backgroundImage,
+            artImageCount: artBackdrop.rec.images.length,
+            artDraw: artBackdrop.rec.images.length ? artBackdrop.rec.images[0].slice(1) : null,
+            artRectCount: artBackdrop.rec.rects.length,
+            loadedWithPlaceholder: !!placeholderBackdrop.probe.backgroundImage,
+            placeholderImageCount: placeholderBackdrop.rec.images.length,
+            placeholderRectCount: placeholderBackdrop.rec.rects.length,
+            loadedWithNothing: !!missingBackdrop.probe.backgroundImage,
+            missingImageCount: missingBackdrop.rec.images.length,
+            missingRectCount: missingBackdrop.rec.rects.length,
+        };
+
+        // ---- 6.6 登船接入：首次 → 完结界面；完结之后再登船 → 直接世界地图 ----
+        // 任务系统换成记录桩：只关心「哪些目标被推进 / 写了哪些剧情标记」，不依赖第二章任务是否注册
+        const savedQuestSystem = main.player.questSystem;
+        const flags = {};
+        const progressCalls = [];
+        main.player.questSystem = {
+            hasStoryFlag: (f) => !!flags[f],
+            setStoryFlag: (f, v) => { flags[f] = (v === undefined ? true : v); },
+            updateQuestProgress: (q, t, tg, c) => { progressCalls.push([q, t, tg, c].join('|')); },
+        };
+        const savedPlayDialogueText = main.playDialogueText;
+        const savedPlayStoryDialogue = main.playStoryDialogue;
+        // sailToZhaochen 会读 this.gameConfig.getMap('zhaochen_xiancheng') 判定第三图是否开放
+        main.gameConfig = main.gameConfig || GameConfig.getInstance();
+        const storyCalls = [];
+        // 对白桩：立刻回调，等同玩家读完（S02 → sailToZhaochen → S03 → 结算 → 完结界面）
+        // 回调可能返回 Promise（sailToZhaochen 是 async），失败时记进 storyCalls 便于定位
+        const runCallback = (onDone, tag) => {
+            if (!onDone) return;
+            try {
+                const p = onDone();
+                if (p && typeof p.catch === 'function') p.catch(e => storyCalls.push('ERROR:' + e.message));
+            } catch (e) {
+                storyCalls.push('ERROR:' + e.message);
+            }
+        };
+        main.playDialogueText = (text, speaker, onDone) => {
+            storyCalls.push('s02_berth');
+            runCallback(onDone);
+            return true;
+        };
+        main.playStoryDialogue = (id, speaker, onDone) => {
+            storyCalls.push(id);
+            runCallback(onDone);
+            return true;
+        };
+
+        switches.length = 0;
+        main.mapTeleport.isVisible = false;
+        main.chapter2Boarding = false;
+        main.boardZhaochenBoat();          // 首次登船
+        const firstBoard = {
+            storyCalls: storyCalls.slice(),
+            switches: switches.slice(),
+            progressCalls: progressCalls.slice(),
+            boardingDone: !!flags['chapter2_boarding_done'],
+            endingSeen: !!flags['game_ending_seen'],
+            mapVisible: main.mapTeleport.isVisible === true,
+        };
+
+        // 玩家在完结界面按任意键（= Main.finishGameEnding）之后再登船：
+        // 不再重播章末对白与完结字幕，直接打开世界地图
+        main.finishGameEnding();
+        storyCalls.length = 0;
+        switches.length = 0;
+        const mapCallsBeforeReboard = mapTeleportCalls.length;
+        main.mapTeleport.isVisible = false;
+        main.boardZhaochenBoat();          // 再次登船
+        const reboard = {
+            storyCalls: storyCalls.slice(),
+            switches: switches.slice(),
+            mapShown: mapTeleportCalls.slice(mapCallsBeforeReboard).join(','),
+            mapVisible: main.mapTeleport.isVisible === true,
+        };
+
+        main.playDialogueText = savedPlayDialogueText;
+        main.playStoryDialogue = savedPlayStoryDialogue;
+        main.player.questSystem = savedQuestSystem;
+
+        const blankLineIndices = lines.map((l, i) => (l.trim() ? -1 : i)).filter(i => i >= 0);
+
+        return {
+            keyboardSwallowed: keyboardSwallowed, enterState: enterState,
+            promptBeforeFinish: promptBeforeFinish, switchesWhileScrolling: switchesWhileScrolling,
+            linePitch: linePitch, firstLineDelta: firstLineDelta, finishedState: finishedState,
+            promptDraws: promptDraws, drawnLineCount: drawnLines.length,
+            blankLineDrawn: promptRec.texts.some(t => t.text === ''),
+            keyExit: keyExit, afterExit: afterExit, mouseExit: mouseExit,
+            midLineCount: midGroups.length,
+            midCenteredCount: midCenteredCount,
+            durationAtDefaultSpeed: Number(((scene.canvasHeight + scene.getTotalHeight() + scene.lineHeight)
+                / scene.defaultScrollSpeed).toFixed(2)),
+            sourceFile: EndingText.getSourceFile(),
+            lineLimit: limit,
+            lineCount: lines.length,
+            blankLineCount: blankLineIndices.length,
+            maxLineLength: Math.max.apply(null, lines.map(l => l.length)),
+            overLimit: lines.filter(l => l.length > limit),
+            firstLine: lines[0],
+            lastLine: lines[lines.length - 1],
+            firstBlankIndex: blankLineIndices.length ? blankLineIndices[0] : -1,
+            canvas: { width: scene.canvasWidth, height: scene.canvasHeight },
+            lineHeight: scene.lineHeight,
+            fontSize: scene.fontSize,
+            letterSpacing: scene.letterSpacing,
+            textFont: scene.textFont,
+            totalHeight: scene.getTotalHeight(),
+            defaultSpeed: scene.defaultScrollSpeed,
+            promptText: scene.promptText,
+            firstBoard: firstBoard,
+            reboard: reboard,
+            backdrop: backdrop };
+    })();
 
     return results;
 })();

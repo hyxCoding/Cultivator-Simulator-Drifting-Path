@@ -3,6 +3,11 @@
  * 显示世界地图，在地图上放置区域按钮
  * 支持自定义按钮数量、位置、大小、可否点击、按钮图标
  * 鼠标悬停时按钮图片上移，实现选中提示效果
+ *
+ * 打开方式（见 js/Main.js）：
+ *   - 调试期：M 键开关（Main.handleKeyDown → mapTeleport.toggle()），ESC 也可关闭
+ *   - 剧情：第一章码头登船（Main.boardShipAndOpenWorldMap → show()）
+ * 地图已删减为前两章，区域按钮只有青岚浮野 / 云渡泽两个（调试期均常开，点击即传送）
  */
 class MapTeleport {
     /**
@@ -242,7 +247,7 @@ class MapTeleport {
         ctx.textAlign = 'right';
         ctx.textBaseline = 'bottom';
         ctx.fillText(
-            '按 ESC 关闭地图',
+            '按 M / ESC 关闭地图',
             this.canvasWidth - 20,
             this.canvasHeight - 20
         );

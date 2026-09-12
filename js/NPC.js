@@ -79,7 +79,10 @@ class NPC {
             this.height = this.baseAnimations.idle.frameHeight || 32;
         }
         // 显示缩放系数（渲染时 displaySize = frameSize * displayScale）
-        this.displayScale = 2;
+        // 默认 2：第一章美术按 1× 像素密度绘制（帧 32×32 等）；
+        // 第二章 NPC 的新美术是 2 倍像素密度（帧 32×64 / 48×64 / 58×64），
+        // Chapter2Config 里给它们写了 displayScale: 1，显示尺寸才与第一章 NPC 一致。
+        this.displayScale = config.displayScale || 2;
         
         // ========== 额外动画配置 ==========
         this.extraAnimations = config.extraAnimations || []; // NPC额外动画配置

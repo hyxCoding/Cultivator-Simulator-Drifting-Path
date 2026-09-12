@@ -9,6 +9,11 @@
  * - 支持任务门控（config.questRequired）：任务未接取（locked）时法阵不显示，
  *   也不会被 Player 的交互检测命中；任务接取后由 updateQuestGate 刷新为可见。
  *   （主线四《山口不止风》的传送法阵即在接取 chapter1_main_4 后才出现）
+ * - 支持目标门控（config.requireObjective = { type, target }，与 js/Signpost.js 同一套语义）：
+ *   还要 questRequired 任务的该目标已完成，法阵才显示。例：第二章云渡泽的万灯台石台法阵
+ *   除了要接取 chapter2_main_4，还必须先完成 talk_to:xulu（向许录取得万灯台通行凭证）
+ *   —— 否则玩家能跳过「拿凭证」那一步直接登台。
+ *   目标完成的瞬间由 Main.onQuestProgress → updateTeleportQuestGates → updateQuestGate 刷新。
  * - 支持 bossArena 标记：标记为 true 时由 Main 走“战场”流程
  *   （记录返回点，战败后落回法阵旁；胜利后在战场正中心生成归途法阵，按 E 回到同一落点）。
  *   战场内的归途法阵由 GameMap.createArenaExitArray 动态生成（bossArena=false，走普通换图流程）。
@@ -31,6 +36,8 @@ class TeleportArray {
      * @param {number}  config.imageHeight    - 图片显示高度，默认 96
      * @param {string}  config.anchor         - 图片对齐方式：'center'（默认，中心对齐）/ 'bottom'
      * @param {string}  config.questRequired  - 需要的任务 ID（可选），任务未接取时法阵隐藏
+     * @param {Object}  config.requireObjective - 目标门控（可选）{ type, target }：
+     *                 需 questRequired 任务的该目标也已完成，法阵才显示（与 Signpost 同一套语义）
      * @param {boolean} config.bossArena      - 是否为主角战场入口（默认 false）
      * @param {string}  config.color          - 程序化法阵颜色（图片缺失时使用）
      * @param {string}  config.glowColor      - 程序化法阵光晕颜色
@@ -64,9 +71,21 @@ class TeleportArray {
 
         // 任务门控
         this.questRequired = config.questRequired || null;
+        // 目标门控（可选）：{ type, target } —— 任务接取 + 指定目标已完成，法阵才可见
+        this.requireObjective = config.requireObjective || null;
 
         // 战场入口标记（主线四）
         this.bossArena = config.bossArena === true;
+
+        // 战场流程参数（由地图配置透传；Main.enterBossArena 读取，缺省时回落到第一章默认值）
+        //   arenaDefeatFlag     —— 击败后写入的剧情标记（决定再次进场是否再生成 Boss）
+        //   arenaVictory        —— 胜利要推进的任务目标 { questId, type, target }
+        //   arenaResourceGroup  —— 进场预加载 / 清场释放用的资源分组名
+        //   arenaReturnMapId    —— 战败 / 胜利后回到的地图（缺省 = 进场所在地图）
+        this.arenaDefeatFlag = config.arenaDefeatFlag || null;
+        this.arenaVictory = config.arenaVictory || null;
+        this.arenaResourceGroup = config.arenaResourceGroup || null;
+        this.arenaReturnMapId = config.arenaReturnMapId || null;
 
         this.isActive = config.isActive !== false;
         this.rotation = 0;
@@ -103,16 +122,30 @@ class TeleportArray {
     /**
      * 根据任务状态控制法阵可见性
      * 任务已接取（active/completed）→ 显示；未接取（locked/未注册）→ 隐藏
+     * 另外支持 requireObjective：只有指定任务目标也已完成时才显示
      * @param {Object} questSystem - 任务的 QuestSystem 实例
      */
     updateQuestGate(questSystem) {
-        if (!this.questRequired) return;  // 无任务门控，不做处理
+        if (!this.questRequired && !this.requireObjective) return;  // 无门控，不做处理
         if (!questSystem) {
             this.isActive = false;
             return;
         }
-        const questState = questSystem.getQuestState(this.questRequired);
-        this.isActive = !!(questState && questState.state !== 'locked');
+        const questState = this.questRequired ? questSystem.getQuestState(this.questRequired) : null;
+        let visible = this.questRequired
+            ? !!(questState && questState.state !== 'locked')
+            : true;
+
+        // 目标门控：接取任务还不够，指定目标也得已完成
+        // （例：万灯台法阵要先向许录取得通行凭证 —— talk_to:xulu）
+        if (visible && this.requireObjective && this.questRequired
+            && typeof questSystem.isObjectiveCompleted === 'function') {
+            visible = questSystem.isObjectiveCompleted(
+                this.questRequired, this.requireObjective.type, this.requireObjective.target
+            );
+        }
+
+        this.isActive = visible;
     }
 
     /**
@@ -277,6 +310,7 @@ class TeleportArray {
         this.targetPosition = data.targetPosition || this.targetPosition;
         this.promptText = data.promptText || this.promptText;
         this.questRequired = data.questRequired || this.questRequired;
+        this.requireObjective = data.requireObjective || this.requireObjective;
         this.isActive = data.isActive !== undefined ? data.isActive : this.isActive;
     }
 }

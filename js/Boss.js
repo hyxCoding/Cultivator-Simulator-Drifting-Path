@@ -48,6 +48,10 @@ class Boss extends Monster {
         
         // ========== 目标相关 ==========
         this.target = null;              // 当前目标（通常是玩家）
+
+        // ========== 战败演出 ==========
+        // 战败动画播放完毕的标记（战场流程用它判断“可以结算胜利了”，见 Main.updateBossArenaBattle）
+        this.defeatSequenceDone = false;
         
         // ========== 回调 ==========
         this.onPhaseChange = null;       // 阶段切换回调 (boss, phase) => void
@@ -601,15 +605,65 @@ class Boss extends Monster {
         const deadAnimation = this.animationManager.getAnimation('dead');
         if (deadAnimation) {
             deadAnimation.onComplete = () => {
+                this.defeatSequenceDone = true;
                 if (this.onDeath) {
                     this.onDeath(this);
                 }
             };
         } else {
+            this.defeatSequenceDone = true;
             if (this.onDeath) {
                 this.onDeath(this);
             }
         }
+    }
+
+    /**
+     * 战败演出是否已播完（战场流程据此结算胜利）
+     * @returns {boolean}
+     */
+    isDefeatSequenceFinished() {
+        return !this.isAlive && this.defeatSequenceDone === true;
+    }
+
+    /**
+     * 受击判定盒（供玩家攻击 / 灵息弹命中检测）
+     * 尺寸取 GameConfig 怪物配置里的 hitBoxSize（缺省 72）
+     * @returns {{x: number, y: number, width: number, height: number}}
+     */
+    getHitRect() {
+        const size = this.monsterConfig && this.monsterConfig.hitBoxSize
+            ? this.monsterConfig.hitBoxSize
+            : 72;
+        return {
+            x: this.position.x - size / 2,
+            y: this.position.y - size / 2,
+            width: size,
+            height: size,
+        };
+    }
+
+    /**
+     * 处理玩家普通攻击 / 技能命中（战场即时战斗用）
+     * @param {Object} attackData - { rect: {x,y,width,height}, damage: number, source: Object }
+     * @returns {boolean} 是否命中
+     */
+    handlePlayerAttack(attackData) {
+        if (!this.isAlive || !attackData || !attackData.rect) {
+            return false;
+        }
+        if (!Boss.rectsIntersect(attackData.rect, this.getHitRect())) {
+            return false;
+        }
+        return this.takeDamage(attackData.damage || 0, attackData.source);
+    }
+
+    /**
+     * 矩形相交判定
+     */
+    static rectsIntersect(a, b) {
+        return a.x < b.x + b.width && a.x + a.width > b.x
+            && a.y < b.y + b.height && a.y + a.height > b.y;
     }
 
     /**

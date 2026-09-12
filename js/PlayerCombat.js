@@ -2,10 +2,10 @@
  * 玩家战斗系统（PlayerCombatSystem）
  * ------------------------------------------------------------------
  * 负责主角在“大地图（gameWorld）”内的实时战斗行为：
- *   J 普通攻击 / U 灵息弹 / I 护体术 / L 闪避
+ *   J 普通攻击 / U 灵息弹 / I 护体术 / L 闪避 / O 剑影连斩
  *
  * 规则要点（均按需求实现）：
- * 1) 只有"基础操作教学"开始后才捕获战斗按键；教学开始前按这 4 个键完全没有响应。
+ * 1) 只有"基础操作教学"开始后才捕获战斗按键；教学开始前这几个键完全没有响应。
  *    —— 教学进行中：必须站在对应的教学圈（训练地面标记）范围内、按提示按下对应按键，
  *       技能/攻击才会施展（不在圈内按对应键没有任何响应，只给出提示），
  *       并且每完成一步，左下角技能栏里对应的那一格（含冷却遮罩）才解锁
@@ -22,16 +22,23 @@
  * 5) 护体术：30 秒冷却、10 秒减伤（减伤期间受伤不播放受伤动画），气场特效在角色之下。
  * 6) 闪避：60 秒冷却、朝当前方向瞬移一段距离（不穿墙）、10 秒内移速 +25%，
  *    气场特效在角色之下；护体术与闪避互斥，不能同时存在。
- * 7) 受伤动画播放期间禁止一切玩家输入（由 hurtLock 控制，Player 同步停止移动）。
- * 8) 气血条 / 灵息条用自定义图片绘制（外框图 + 内条图，条上不显示数字，只看长度）：
+ * 7) 剑影连斩（O，第二章主线一《渡口无归客》剑修基础连招试炼传授）：15 秒冷却、消耗较多灵息、
+ *    无技能动画（按下瞬间出手，因此受伤也不会被打断）；在角色的上/下/左/右四个方向各生成一道剑气，
+ *    剑气朝各自方向直线飞行、超过最大飞行距离自行消失；剑气只对敌人造成伤害，
+ *    命中敌人后立刻消失，并在命中点生成"透明渐变扩大的圆"命中特效。
+ *    该技能只有"已习得"才占左下角技能栏第 4 格（见 isSkillLearned / CONFIG.jianying.learnedGate）。
+ * 8) 受伤动画播放期间禁止一切玩家输入（由 hurtLock 控制，Player 同步停止移动）。
+ * 9) 气血条 / 灵息条用自定义图片绘制（外框图 + 内条图，条上不显示数字，只看长度）：
  *    两图左上角对齐、先画内条再画外框；内条只绘制"X∈[0,78) 的左侧固定装饰 + X∈[78,454) 中
  *    按当前值比例的部分"（当前血量 h、上限 H 时 = 源图 X = 0 → 78 + h/H × 376）。
  *    图片规格与路径见 CONFIG.hud；图片缺失或尺寸不符时该条不绘制（不再用代码画条）。
  *
- * 9) 左下角技能栏（灵息弹 / 护体术 / 闪避）用各自的 100×100 图片绘制，格子上不写任何文字
+ * 10) 左下角技能栏（灵息弹 / 护体术 / 闪避，以及习得后的剑影连斩）用各自的 100×100 图片绘制，
+ *    格子上不写任何文字
  *    （按键字母 / 技能名 / 冷却倒计时全部由美术图承担，见 CONFIG.hud.skillBar 的三个 show* 开关）；
  *    技能冷却中只从格子顶部按下冷却遮罩；图片缺失 / 尺寸不符时该格回退程序化方框（同样不写字）。
- *    普通攻击（J）不占格子。规格与路径见 CONFIG.hud.skillBar 与各技能的 hudIcon。
+ *    普通攻击（J）不占格子；剑影连斩（O）习得后才补出第 4 格。
+ *    规格与路径见 CONFIG.hud.skillBar 与各技能的 hudIcon。
  *
  * 美术资源：战斗特效见 js/CombatEffect.js 顶部说明（资源缺失时自动使用程序化占位特效）；
  *          气血条 / 灵息条 / 左下角技能栏图标见 CONFIG.hud（assets/images/ui/ 下的图片）。
@@ -109,6 +116,45 @@ class PlayerCombatSystem {
                 auraColor: '#c8a6ff',
                 trainingAction: 'dodge',
             },
+            // O 剑影连斩（第二章主线一《渡口无归客》「剑修基础连招试炼」传授，学会后才占技能栏）
+            // 需求：冷却 15 秒 / 消耗较多法力 / 无技能动画（按下瞬间出手）/ 受伤不打断；
+            //       在角色的上、下、左、右四个方向各生成一道剑气，剑气朝各自方向直线飞行，
+            //       超过最大移动距离自行消失；剑气只对敌人造成伤害，命中敌人后立刻消失并生成命中特效。
+            // 剑气动画规格：4 行（右/左/下/上）× 6 帧，单帧 96×96，循环播放。
+            // 左下角技能栏图标（规格 100×100）：assets/images/ui/skill_jianying.png
+            jianying: {
+                id: 'jianying', name: '剑影连斩', key: 'o',
+                hudIcon: 'ui.skill_jianying',
+                manaCost: 30, cooldown: 15,
+                // 只有「已习得」才占技能栏（不吃基础操作教学的逐格解锁）：
+                //   学会时机 = 第二章主线一「剑修连招试炼」教学圈完成（Main.learnProfessionSkill('jianying')）；
+                //   读档兜底见 isSkillLearned()（技能等级 / 任务目标任一满足即可）。
+                learnedGate: true,
+                learnedFrom: { questId: 'chapter2_main_1', type: 'complete_training', target: 'sword' },
+                // 无技能动画：不写 casting，因此受伤也不会打断（与普攻同一条"按下瞬间结算"路径）
+                castAnimation: null,
+                // 出生点偏移（按方向，相对玩家逻辑坐标 = 角色碰撞盒中心；(13,15) 为贴图可见中心，
+                // 再沿该方向前移 60px，避免剑气压在角色身上；改这四组分量即可微调出手位置）
+                spawnOffsets: {
+                    up:    { x: 13, y: -45 },   // (13, 15) - 60
+                    down:  { x: 13, y: 75 },    // (13, 15) + 60
+                    left:  { x: -47, y: 15 },   // (13, 15) - (60, 0)
+                    right: { x: 73, y: 15 },    // (13, 15) + (60, 0)
+                },
+                projectileSpeed: 360, maxDistance: 240, damage: 30, hitRadius: 40,
+                projectileKey: 'effects.player_jianying',
+                projectileFrames: 6, projectileFrameWidth: 96, projectileFrameHeight: 96, projectileFps: 12,
+                projectileRows: { right: 0, left: 1, down: 2, up: 3 },
+                projectileColor: '#cfe9ff',
+                projectileShape: 'sword_qi',
+                // 命中特效：以命中点为圆心的"透明 / 渐变 / 扩大"的圆
+                hitKey: 'effects.player_jianying_hit',
+                hitFrames: 6, hitFrameWidth: 96, hitFrameHeight: 96, hitFps: 14,
+                hitColor: '#bfe9ff',
+                hitShape: 'ring_expand',
+                trainingAction: 'skill_jianying',   // 教学圈动作类型（与 Chapter2Config.getSwordTrainingLayout() 一致）
+                                                    // 未习得时 O 仅在第二章试炼的教学圈内可施展 → 圈内按 O 即完成教学圈 → 学会该技能
+            },
             // 筑基调息气场（章末剧情，非战斗技能）
             // 由 Main.startFoundationTrial 调用 playFoundationAura()：主角朝下静立 5 秒，
             // 气场绘制在角色之下（layer 'under'），循环播放到 duration 结束。
@@ -165,7 +211,8 @@ class PlayerCombatSystem {
                 //   4) 图片缺失 / 尺寸不符（含 32×32 品红占位图）时该格回退程序化方框（同样不写文字）；
                 //   5) 该格对应的技能尚未解锁（教学未完成该步）时不绘制；一格都没有时整条技能栏隐藏。
                 skillBar: {
-                    order: ['lingxidan', 'hutishu', 'dodge'],   // 参与技能栏的技能（普攻 J 不在其中）
+                    order: ['lingxidan', 'hutishu', 'dodge', 'jianying'],   // 参与技能栏的技能（普攻 J 不在其中；
+                                                                            // 剑影连斩习得后才出现，见 CONFIG.jianying.learnedGate）
                     iconSize: 100,      // 图标规格 = 默认绘制尺寸（100×100）
                     scale: 1,           // 整体缩放（1 = 100×100 原尺寸）
                     gap: 12,            // 格子间距
@@ -182,13 +229,22 @@ class PlayerCombatSystem {
     }
 
     /**
-     * 战斗按键顺序（J 普通攻击 → U 灵息弹 → I 护体术 → L 闪避）
+     * 战斗按键顺序（J 普通攻击 → U 灵息弹 → I 护体术 → L 闪避 → O 剑影连斩）
      * 与 CONFIG 中各项的 id 一致：按键捕获与教学步骤都按这个顺序。
-     * 注意：左下角技能栏只画 U / I / L（普攻不占格），顺序见 CONFIG.hud.skillBar.order。
+     * 注意：左下角技能栏只画 U / I / L（普攻不占格；O 习得后补出第 4 格），
+     *       顺序见 CONFIG.hud.skillBar.order。
      * @returns {string[]}
      */
     static get SKILL_ORDER() {
-        return ['attack', 'lingxidan', 'hutishu', 'dodge'];
+        return ['attack', 'lingxidan', 'hutishu', 'dodge', 'jianying'];
+    }
+
+    /**
+     * 剑影连斩的四道剑气方向（上 / 下 / 左 / 右，与需求一致）
+     * @returns {string[]}
+     */
+    static get JIANYING_DIRECTIONS() {
+        return ['up', 'down', 'left', 'right'];
     }
 
     /**
@@ -204,7 +260,7 @@ class PlayerCombatSystem {
         this._applyGameConfigValues();
 
         // ========== 运行状态 ==========
-        this.cooldowns = { attack: 0, lingxidan: 0, hutishu: 0, dodge: 0 };
+        this.cooldowns = { attack: 0, lingxidan: 0, hutishu: 0, dodge: 0, jianying: 0 };
         this.buffs = { hutishu: 0, dodge: 0 };     // 剩余秒数
         this.hurtLock = 0;                          // 受伤僵直剩余秒数（>0 时禁止一切输入）
         this.casting = null;                        // { timer } 施法中的灵息弹
@@ -214,6 +270,9 @@ class PlayerCombatSystem {
         this.dodgeAura = null;                      // 闪避气场实例（跟随玩家）
         this.foundationAura = null;                 // 筑基调息气场实例（章末剧情，跟随玩家）
         this.foundationAuraTimer = 0;               // 筑基调息气场剩余秒数
+        this.controlChain = null;                   // 渡厄使「控制」命中的锁链实例（跟随玩家头顶）
+        this.controlChainTimer = 0;                 // 锁链剩余秒数
+        this.controlChainSpriteRequested = false;   // 锁链图是否已发起加载
         this.toast = { text: '', timer: 0 };        // 屏幕提示（灵息不足 / 冷却中等）
         this.unlockedOnce = false;                  // 教学开始后永久锁定为解锁
         this.forceUnlocked = config.forceUnlocked === true;
@@ -265,6 +324,18 @@ class PlayerCombatSystem {
             if (hutishu && typeof hutishu.shieldPercent === 'number') {
                 this.config.hutishu.damageReduction = hutishu.shieldPercent / 100;
             }
+
+            // 剑影连斩：伤害 / 最大飞行距离（range）/ 飞行速度取 GameConfig（冷却与消耗仍按需求书）
+            const jianying = gameConfig.getSkill && gameConfig.getSkill('jianying');
+            if (jianying) {
+                if (typeof jianying.damage === 'number') this.config.jianying.damage = jianying.damage;
+                if (typeof jianying.range === 'number' && jianying.range > 0) {
+                    this.config.jianying.maxDistance = jianying.range;
+                }
+                if (typeof jianying.projectileSpeed === 'number' && jianying.projectileSpeed > 0) {
+                    this.config.jianying.projectileSpeed = jianying.projectileSpeed;
+                }
+            }
         } catch (error) {
             console.warn('[PlayerCombat] 读取 GameConfig 技能数值失败，使用默认配置', error);
         }
@@ -283,6 +354,8 @@ class PlayerCombatSystem {
             ['swordAura', cfg.attack.auraKey],
             ['lingxidanProjectile', cfg.lingxidan.projectileKey],
             ['lingxidanHit', cfg.lingxidan.hitKey],
+            ['jianyingProjectile', cfg.jianying.projectileKey],
+            ['jianyingHit', cfg.jianying.hitKey],
             ['hutishuAura', cfg.hutishu.auraKey],
             ['dodgeAura', cfg.dodge.auraKey],
             ['foundationAura', cfg.foundationAura.key],
@@ -361,10 +434,11 @@ class PlayerCombatSystem {
     /**
      * 某个技能当前是否已解锁（决定左下角技能栏是否画出这一格）
      * 注意：普通攻击（attack）同样随教学解锁，但不画进技能栏（见 CONFIG.hud.skillBar.order）。
+     * - 需要「已习得」的技能（CONFIG.xxx.learnedGate，如剑影连斩）：只看是否学会（见 isSkillLearned）
      * - 教学进行中：只有已完成的教学步骤对应的技能解锁（逐格解锁 + 冷却提示）
      * - 教学已完成 / 读档后任务目标已完成：全部解锁
      * - 教学尚未开始：全部未解锁（技能栏整条隐藏，按键无响应）
-     * @param {string} id - 'attack' | 'lingxidan' | 'hutishu' | 'dodge'
+     * @param {string} id - 'attack' | 'lingxidan' | 'hutishu' | 'dodge' | 'jianying'
      * @returns {boolean}
      */
     isSkillUnlocked(id) {
@@ -372,6 +446,9 @@ class PlayerCombatSystem {
 
         const cfg = this.config[id];
         if (!cfg) return false;
+
+        // 由剧情 / 任务传授的技能（如第二章试炼的剑影连斩）：学会才可用，不参与基础操作教学
+        if (cfg.learnedGate === true) return this.isSkillLearned(id);
 
         const trainingManager = this._trainingManager();
         if (trainingManager) {
@@ -385,11 +462,39 @@ class PlayerCombatSystem {
     }
 
     /**
+     * 某个技能是否已习得（读档 / 存档通用）
+     * 判定顺序：
+     *   1) 职业系统里的技能等级 > 0（Main.learnProfessionSkill 写入，随存档保存）；
+     *   2) 任务目标兜底（例如剑影连斩 = 第二章主线一《渡口无归客》的 complete_training/sword 已完成），
+     *      避免旧存档里"任务已完成但技能未写入"时技能栏空一格。
+     * @param {string} id - 技能 id（需在 CONFIG 中配置 learnedFrom）
+     * @returns {boolean}
+     */
+    isSkillLearned(id) {
+        const cfg = this.config[id];
+        if (!cfg) return false;
+
+        const player = this.player;
+        const system = player ? player.professionSystem : null;
+        if (system && typeof system.getSkillLevel === 'function' && system.getSkillLevel(id) > 0) {
+            return true;
+        }
+
+        const gate = cfg.learnedFrom;
+        const questSystem = player ? player.questSystem : null;
+        if (gate && questSystem && typeof questSystem.isObjectiveCompleted === 'function') {
+            return !!questSystem.isObjectiveCompleted(gate.questId, gate.type, gate.target);
+        }
+
+        return false;
+    }
+
+    /**
      * 某个战斗行为当前是否可施展（按键门控）
      * - 教学进行中：必须站在对应教学圈（训练地面标记）范围内
      *   （由 TrainingManager.nearbyZone 判定，未完成且动作类型匹配）
      * - 其余情况：按 isSkillUnlocked 判定
-     * @param {string} id - 'attack' | 'lingxidan' | 'hutishu' | 'dodge'
+     * @param {string} id - 'attack' | 'lingxidan' | 'hutishu' | 'dodge' | 'jianying'
      * @returns {boolean}
      */
     canUseAction(id) {
@@ -407,13 +512,21 @@ class PlayerCombatSystem {
 
     /**
      * 教学期按键未命中教学圈时的提示（教学外静默，保持"教学前按键完全无响应"）
-     * @param {string} id - 'attack' | 'lingxidan' | 'hutishu' | 'dodge'
+     * 说明：本次教学没有该动作的教学圈时完全静默（例如第一章基础教学的 4 个圈里没有剑影连斩），
+     *       不弹"先走到「…」教学圈内"这类无意义提示；第二章剑修试炼只有一个剑影连斩圈，
+     *       此时只有 O 键会出现该提示。
+     * @param {string} id - 'attack' | 'lingxidan' | 'hutishu' | 'dodge' | 'jianying'
      */
     _notifyTrainingGate(id) {
-        if (!this._trainingManager()) return;
+        const trainingManager = this._trainingManager();
+        if (!trainingManager) return;
 
         const cfg = this.config[id];
         if (!cfg) return;
+
+        const zones = Array.isArray(trainingManager.zones) ? trainingManager.zones : [];
+        const included = zones.some(zone => zone && zone.actionType === cfg.trainingAction);
+        if (!included) return;      // 本次教学没有这个动作 → 静默
 
         const zone = this._findTrainingZone(cfg.trainingAction);
         const zoneName = zone && zone.name ? zone.name : cfg.name;
@@ -423,7 +536,7 @@ class PlayerCombatSystem {
 
     /**
      * 取得（未完成的）对应教学圈
-     * @param {string} actionType - 'attack' | 'skill_lingxidan' | 'skill_hutishu' | 'dodge'
+     * @param {string} actionType - 'attack' | 'skill_lingxidan' | 'skill_hutishu' | 'dodge' | 'skill_jianying'
      * @returns {TrainingZone|null}
      */
     _findTrainingZone(actionType) {
@@ -452,6 +565,7 @@ class PlayerCombatSystem {
         this._updateProjectiles(deltaTime);
         this._updateCasting(deltaTime);
         this._updateFoundationAura(deltaTime);
+        this._updateControlChain(deltaTime);
 
         // 2. 解锁判定：教学一开始就永久解锁
         //    灵息回复不在这里处理：统一走 Player.updateManaRegen 的全局自然恢复
@@ -491,6 +605,7 @@ class PlayerCombatSystem {
                 case 'lingxidan': this.tryCastLingxidan(); break;
                 case 'hutishu': this.tryHutishu(); break;
                 case 'dodge': this.tryDodge(); break;
+                case 'jianying': this.tryCastJianying(); break;
             }
             return;
         }
@@ -738,6 +853,65 @@ class PlayerCombatSystem {
         return true;
     }
 
+    // ==================== 行为：剑影连斩（O） ====================
+
+    /**
+     * 剑影连斩：15 秒冷却、较多灵息，无技能动画（按下瞬间出手，因此受伤也不会被打断）；
+     * 在角色的上 / 下 / 左 / 右四个方向各生成一道剑气，剑气朝各自方向直线飞行，
+     * 超过最大飞行距离自行消失；剑气只对敌人造成伤害，命中敌人后立刻消失并生成命中特效。
+     * @returns {boolean} 是否成功施展
+     */
+    tryCastJianying() {
+        const cfg = this.config.jianying;
+        if (!this._checkCost(cfg)) return false;
+
+        const player = this.player;
+        this._pay(cfg.manaCost);
+        this.cooldowns.jianying = cfg.cooldown;
+
+        // 四向剑气：立即生成（不写 casting → 受伤不会中断，与普攻同一套"按下瞬间结算"规则）
+        PlayerCombatSystem.JIANYING_DIRECTIONS.forEach(direction => {
+            const offset = this._getJianyingSpawnOffset(direction);
+            this.projectiles.push(new CombatProjectile({
+                name: cfg.id,
+                label: cfg.name,
+                position: {
+                    x: player.position.x + offset.x,
+                    y: player.position.y + offset.y,
+                },
+                direction: direction,
+                speed: cfg.projectileSpeed,
+                maxDistance: cfg.maxDistance,
+                damage: cfg.damage,
+                radius: cfg.hitRadius,
+                spriteSheet: this.sprites.jianyingProjectile,
+                frameWidth: cfg.projectileFrameWidth,
+                frameHeight: cfg.projectileFrameHeight,
+                frameCount: cfg.projectileFrames,
+                directionRows: cfg.projectileRows,
+                fps: cfg.projectileFps,
+                color: cfg.projectileColor,
+                shape: cfg.projectileShape,
+                // 命中特效：透明 / 渐变 / 扩大的圆（缺图时由 CombatEffect 程序化绘制）
+                hitEffect: {
+                    name: cfg.id + '_hit',
+                    spriteSheet: this.sprites.jianyingHit,
+                    frameWidth: cfg.hitFrameWidth,
+                    frameHeight: cfg.hitFrameHeight,
+                    frameCount: cfg.hitFrames,
+                    fps: cfg.hitFps,
+                    shape: cfg.hitShape,
+                    color: cfg.hitColor,
+                },
+            }));
+        });
+
+        // 教学圈：在第二章试炼的剑影连斩圈内施展 → 完成该教学圈（全部完成即学会该技能）
+        this._notifyTraining(cfg.trainingAction);
+
+        return true;
+    }
+
     // ==================== 内部工具 ====================
 
     /**
@@ -814,6 +988,24 @@ class PlayerCombatSystem {
     }
 
     /**
+     * 剑影连斩剑气出生点偏移（按方向，相对玩家逻辑坐标）
+     * 数值来源：CONFIG.jianying.spawnOffsets；配置缺项时回退为"沿该方向前移 60px"。
+     * @param {string} direction - 'up' | 'down' | 'left' | 'right'
+     * @returns {Object} {x, y} 偏移
+     */
+    _getJianyingSpawnOffset(direction) {
+        const cfg = this.config.jianying;
+        const table = cfg.spawnOffsets || {};
+        const offset = table[direction];
+        if (offset && typeof offset.x === 'number' && typeof offset.y === 'number') {
+            return { x: offset.x, y: offset.y };
+        }
+
+        const vector = this._facingVector(direction);
+        return { x: vector.x * 60, y: vector.y * 60 };
+    }
+
+    /**
      * 朝当前朝向瞬移（分步推进，遇墙 / 出界即停止）
      * @param {number} distance - 期望距离（像素）
      * @returns {number} 实际移动距离
@@ -854,7 +1046,7 @@ class PlayerCombatSystem {
 
     /**
      * 通知训练管理器（教学中完成对应训练圆球）
-     * @param {string} actionType - 'attack' | 'skill_lingxidan' | 'skill_hutishu' | 'dodge'
+     * @param {string} actionType - 'attack' | 'skill_lingxidan' | 'skill_hutishu' | 'dodge' | 'skill_jianying'
      */
     _notifyTraining(actionType) {
         const trainingManager = this.main ? this.main.trainingManager : null;
@@ -1094,6 +1286,87 @@ class PlayerCombatSystem {
         }
     }
 
+    // ==================== 渡厄使「控制」锁链 ====================
+
+    /**
+     * 「控制」命中：玩家头顶出现 32×32 锁链图（跟随玩家，绘制在角色之上）
+     * 只负责表现；禁止按键由 Main.startArenaControlLock 接管
+     * @param {number} [durationSeconds=3] - 锁链显示时长（秒）
+     * @returns {CombatEffect|null}
+     */
+    attachControlChain(durationSeconds = 3) {
+        this.stopControlChain();
+
+        this.controlChainTimer = Math.max(0, durationSeconds || 0);
+        if (this.controlChainTimer <= 0) return null;
+
+        this._ensureControlChainSprite();
+
+        this.controlChain = this._spawnEffect('boss_due_chain', {
+            spriteSheet: this.sprites.bossDueChain || null,   // 缺图 → CombatEffect 程序化绘制锁链
+            frameWidth: 32,
+            frameHeight: 32,
+            frameCount: 1,
+            fps: 4,
+            loop: true,                 // 循环播放，何时结束由计时器决定
+            follow: this.player,
+            offset: { x: 0, y: -46 },   // 玩家头顶
+            layer: 'over',
+            shape: 'chain',
+            color: '#f2d9a0',
+        });
+
+        console.log(`[PlayerCombat] 控制锁链出现（${this.controlChainTimer} 秒）`);
+        return this.controlChain;
+    }
+
+    /**
+     * 停止锁链特效（计时结束 / 解除控制时调用）
+     */
+    stopControlChain() {
+        this.controlChainTimer = 0;
+        if (this.controlChain) {
+            this._removeEffect(this.controlChain);
+            this.controlChain = null;
+        }
+    }
+
+    /**
+     * 锁链是否正在显示
+     * @returns {boolean}
+     */
+    isControlChainActive() {
+        return !!this.controlChain && this.controlChainTimer > 0;
+    }
+
+    /**
+     * 推进锁链计时（到时自动移除）
+     * @param {number} deltaTime
+     */
+    _updateControlChain(deltaTime) {
+        if (!this.controlChain) return;
+
+        this.controlChainTimer -= deltaTime;
+        if (this.controlChainTimer <= 0) {
+            console.log('[PlayerCombat] 控制锁链结束');
+            this.stopControlChain();
+        }
+    }
+
+    /**
+     * 懒加载锁链图（effects.boss_due_chain，32×32 单帧）
+     * 缺失时 CombatEffect 自动改用程序化锁链，功能不受影响
+     */
+    _ensureControlChainSprite() {
+        if (this.controlChainSpriteRequested) return;
+        this.controlChainSpriteRequested = true;
+
+        if (typeof ResourceManager === 'undefined') return;
+        ResourceManager.getInstance().loadImage('effects.boss_due_chain')
+            .then(image => { this.sprites.bossDueChain = image; })
+            .catch(() => { this.sprites.bossDueChain = null; });
+    }
+
     // ==================== 灵息弹：飞行与命中 ====================
 
     /**
@@ -1116,11 +1389,11 @@ class PlayerCombatSystem {
                 continue;
             }
 
-            // 命中敌人 → 扣血 + 原地生成命中特效
+            // 命中敌人 → 扣血 + 原地生成命中特效（剑气命中后立刻消失：continue 不再入 survivors）
             const enemy = this._findHitEnemy(projectile.getRect());
             if (enemy) {
-                this._applyDamage(enemy, projectile.damage, this.config.lingxidan.name);
-                this._spawnHitEffect(projectile.position);
+                this._applyDamage(enemy, projectile.damage, projectile.label || this.config.lingxidan.name);
+                this._spawnHitEffect(projectile.position, projectile.hitEffect);
                 continue;
             }
 
@@ -1144,23 +1417,31 @@ class PlayerCombatSystem {
     }
 
     /**
-     * 生成命中特效（原地，1 行 6 帧 48×48）
-     * @param {Object} position
+     * 生成命中特效
+     * - 不传 hitEffect 时使用灵息弹命中特效（原地，1 行 6 帧 48×48，'burst'）
+     * - 剑影连斩传自己的 hitEffect（1 行 6 帧 96×96，shape 'ring_expand' =
+     *   以命中点为圆心、透明渐变并不断扩大的圆）
+     * @param {Object} position - 命中点世界坐标
+     * @param {Object} [hitEffect] - 命中特效配置（技能自带，见 CONFIG.jianying.hitEffect 组装的字段）
      */
-    _spawnHitEffect(position) {
+    _spawnHitEffect(position, hitEffect) {
         const cfg = this.config.lingxidan;
-        this._spawnEffect('lingxidan_hit', {
+        const preset = hitEffect || {
+            name: 'lingxidan_hit',
             spriteSheet: this.sprites.lingxidanHit,
             frameWidth: cfg.hitFrameWidth,
             frameHeight: cfg.hitFrameHeight,
             frameCount: cfg.hitFrames,
             fps: cfg.hitFps,
+            shape: 'burst',
+            color: cfg.hitColor,
+        };
+
+        this._spawnEffect(preset.name || 'hit', Object.assign({}, preset, {
             loop: false,
             position: { x: position.x, y: position.y },
             layer: 'over',
-            shape: 'burst',
-            color: cfg.hitColor,
-        });
+        }));
     }
 
     // ==================== 伤害结算 ====================

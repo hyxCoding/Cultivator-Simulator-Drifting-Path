@@ -203,6 +203,7 @@ class ShanxiaoBoss {
         // ========== 属性 ==========
         this.realm = this.monsterConfig.realm || 'lianqi';
         this.maxHealth = config.maxHealth || this.monsterConfig.health || 300;
+        this.maxHealth = 1;//调试阶段写1，后续要删除
         this.health = this.maxHealth;
         this.damage = config.damage || this.monsterConfig.damage || 20;
         this.defense = config.defense || this.monsterConfig.defense || 5;

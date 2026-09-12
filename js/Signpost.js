@@ -36,6 +36,12 @@ class Signpost {
         this.anchor = config.anchor === 'bottom' ? 'bottom' : 'center';   // 图片对位，见类头说明
         this.questRequired = config.questRequired || null;  // 任务门控
         this.gameId = config.gameId || null;
+        // 目标门控（可选）：requireObjective = { type, target }，
+        // 只有该任务目标已完成时路标才可见（配合 questRequired 使用，例如
+        // “接取主线三 + 已向阿禾确认归魂点”才出现的水道入口）
+        this.requireObjective = config.requireObjective || null;
+        // 开小游戏前的引导对白（可选）：按 E 后先播这段文字，读完再由 Main 启动 gameId 小游戏
+        this.roleplayDialogue = config.roleplayDialogue || null;
         this.oneShot = config.oneShot ?? false;
         this.isActivated = false;
         this.isActive = true;  // 初始可见，由 updateQuestGate 控制
@@ -78,6 +84,7 @@ class Signpost {
     /**
      * 根据任务状态控制路标可见性
      * 任务已接取（active/completed）→ 显示；未接取（locked/未注册）→ 隐藏
+     * 另外支持 requireObjective：只有指定任务目标也已完成时才显示
      * @param {Object} questSystem - 任务的 QuestSystem 实例
      */
     updateQuestGate(questSystem) {
@@ -88,7 +95,15 @@ class Signpost {
         }
         const questState = questSystem.getQuestState(this.questRequired);
         // 任务已存在且不是 locked 状态 → 已接取，显示
-        this.isActive = !!(questState && questState.state !== 'locked');
+        let visible = !!(questState && questState.state !== 'locked');
+
+        if (visible && this.requireObjective && typeof questSystem.isObjectiveCompleted === 'function') {
+            visible = questSystem.isObjectiveCompleted(
+                this.questRequired, this.requireObjective.type, this.requireObjective.target
+            );
+        }
+
+        this.isActive = visible;
     }
 
     // ==================== 范围检测 ====================

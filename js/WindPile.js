@@ -33,6 +33,8 @@ class WindPile {
      * @param {number}   config.imageWidth      - 图片显示宽度（默认 58）
      * @param {number}   config.imageHeight     - 图片显示高度（默认 128）
      * @param {string}   config.anchor          - 图片对齐方式：'bottom'（默认，底边中心对齐）/ 'center'（图片中心对齐）
+     * @param {boolean}  config.showPlaceholderBody - 是否绘制“缺图时的程序化占位桩体”（默认 true）；
+     *        配 false → 缺图时地图上不出现代码画的石柱，交互 / 提示 / 任务门控照旧
      * @param {string}   config.type            - 类型标记（默认 'wind_pile'，子类可覆盖）
      * @param {string}   config.questId         - 关联任务 ID
      * @param {string}   config.objectiveType   - 关联目标类型，默认 'investigate'
@@ -55,6 +57,12 @@ class WindPile {
         this.anchor = config.anchor === 'center' ? 'center' : 'bottom';
         this.type = config.type || 'wind_pile';
 
+        // 是否绘制“美术缺图时的程序化占位桩体”（默认 true = 保持第一章镇风桩的既有表现）。
+        // 配 false → 缺图时整根程序化石桩都不绘制（地图上不留代码画的柱子），
+        // 但交互半径 / 「按 E 调查」提示 / 任务门控 / 发放物品全部照旧；
+        // 补上 image 指向的图片后自动恢复显示立绘（见 render）。
+        this.showPlaceholderBody = config.showPlaceholderBody !== false;
+
         // 任务门控信息
         this.questId = config.questId || null;
         this.objectiveType = config.objectiveType || 'investigate';
@@ -62,6 +70,9 @@ class WindPile {
 
         // 调查对话内容
         this.dialogue = config.dialogue || null;
+
+        // 调查完成后一并发放的剧情物品 ID 列表（如万灯台台后的账册 / 命令）
+        this.grantItems = Array.isArray(config.grantItems) ? config.grantItems : [];
 
         // 状态
         this.isVisible = true;          // 桩体常驻显示
@@ -190,6 +201,13 @@ class WindPile {
     render(ctx, camera) {
         if (!this.isVisible) return;
 
+        // 配置要求不画占位桩体（showPlaceholderBody: false）且美术缺图：
+        // 桩体本身不画（地图上不出现任何“代码画的柱子”），但「轮到调查」时
+        // 仍要画出高亮标记 —— 否则万灯台台后的账册 / 命令石案会彻底看不见，
+        // 玩家只能靠走近时弹出的「按 E 调查」提示盲找（见 _renderHighlight）。
+        const drawBody = !!this.image || this.showPlaceholderBody;
+        if (!drawBody && !this.canInvestigate) return;
+
         const renderPos = camera ? camera.getRenderPosition() : { x: 0, y: 0 };
         const screenX = this.position.x - renderPos.x;
         const w = this.imageWidth;
@@ -200,36 +218,76 @@ class WindPile {
 
         ctx.save();
 
-        // 地面阴影，让桩体“站”在地上
-        ctx.globalAlpha = 0.28;
-        ctx.fillStyle = '#000000';
-        ctx.beginPath();
-        ctx.ellipse(screenX, groundY, w * 0.6, Math.max(4, w * 0.2), 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.globalAlpha = 1;
-
-        // 可调查时的高亮光晕（脉动）
-        if (this.canInvestigate) {
-            const centerY = groundY - h * 0.45;
-            const glowRadius = w * 1.6 + Math.sin(this.glowTimer) * 4;
-            const gradient = ctx.createRadialGradient(screenX, centerY, 2, screenX, centerY, glowRadius);
-            gradient.addColorStop(0, 'rgba(255, 226, 130, 0.32)');
-            gradient.addColorStop(0.6, 'rgba(255, 226, 130, 0.12)');
-            gradient.addColorStop(1, 'rgba(255, 226, 130, 0)');
-            ctx.fillStyle = gradient;
+        // 地面阴影，让桩体“站”在地上（没有实体可画的调查点跳过，只留高亮）
+        if (drawBody) {
+            ctx.globalAlpha = 0.28;
+            ctx.fillStyle = '#000000';
             ctx.beginPath();
-            ctx.arc(screenX, centerY, glowRadius, 0, Math.PI * 2);
+            ctx.ellipse(screenX, groundY, w * 0.6, Math.max(4, w * 0.2), 0, 0, Math.PI * 2);
             ctx.fill();
+            ctx.globalAlpha = 1;
+        }
+
+        // 可调查时的高亮（脉动光晕 + 地面光环 + 提示光柱）：
+        // 调查完成（isInvestigated → canInvestigate = false）后自动消失，
+        // 即「击败渡厄使后亮起、查完账册 / 命令后熄灭」。
+        if (this.canInvestigate) {
+            this._renderHighlight(ctx, screenX, groundY, w, h, drawBody);
         }
 
         // 桩体
         if (this.image) {
             ctx.drawImage(this.image, screenX - w / 2, groundY - h, w, h);
-        } else {
+        } else if (this.showPlaceholderBody) {
             this._renderFallback(ctx, screenX, groundY, w, h);
         }
 
         ctx.restore();
+    }
+
+    /**
+     * 可调查高亮：脉动光晕（一直有）+「缺立绘时」的地面光环与细光柱
+     * - 脉动光晕沿用第一章镇风桩的既有表现（有立绘的调查点外观不变）
+     * - drawBody = false（showPlaceholderBody: false 且美术缺图）时，再加地面光环 + 光柱：
+     *   没有实体可看时，这两样是玩家唯一能找到石案的线索（万灯台台后账册 / 命令）
+     * - 由 this.glowTimer 驱动脉动（update 每帧推进），读档 / 重进地图后自动续上
+     * @param {CanvasRenderingContext2D} ctx
+     * @param {number} screenX - 锚点在屏幕上的 X
+     * @param {number} groundY - 桩基 / 箱底在屏幕上的 Y
+     * @param {number} w - 图片（或程序化占位）显示宽度
+     * @param {number} h - 图片（或程序化占位）显示高度
+     * @param {boolean} drawBody - 是否有可见实体（立绘 / 程序化占位桩体）
+     */
+    _renderHighlight(ctx, screenX, groundY, w, h, drawBody) {
+        const pulse = Math.sin(this.glowTimer);
+        const glowRadius = w * 1.9 + pulse * 4;
+        const centerY = groundY - h * 0.45;
+
+        // ① 脉动光晕
+        const gradient = ctx.createRadialGradient(screenX, centerY, 2, screenX, centerY, glowRadius);
+        gradient.addColorStop(0, 'rgba(255, 226, 130, 0.32)');
+        gradient.addColorStop(0.6, 'rgba(255, 226, 130, 0.12)');
+        gradient.addColorStop(1, 'rgba(255, 226, 130, 0)');
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(screenX, centerY, glowRadius, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (drawBody) return;
+
+        // ② 地面光环（告诉玩家「站在这里按 E」）
+        ctx.strokeStyle = 'rgba(255, 226, 130, ' + (0.55 + pulse * 0.2).toFixed(3) + ')';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.ellipse(screenX, groundY, w * 0.7, Math.max(6, w * 0.26), 0, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // ③ 细光柱（从地面往上，远远就能看见）
+        const beamGradient = ctx.createLinearGradient(0, groundY, 0, groundY - h * 1.4);
+        beamGradient.addColorStop(0, 'rgba(255, 226, 130, 0.30)');
+        beamGradient.addColorStop(1, 'rgba(255, 226, 130, 0)');
+        ctx.fillStyle = beamGradient;
+        ctx.fillRect(screenX - w * 0.22, groundY - h * 1.4, w * 0.44, h * 1.4);
     }
 
     /**

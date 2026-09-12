@@ -15,6 +15,8 @@
  *   命中   assets/images/effects/player_lingxidan_hit.png  1 行 6 帧，单帧 48×48
  *   护体术 assets/images/effects/player_hutishu_aura.png   1 行 4 帧，单帧 48×64
  *   闪避   assets/images/effects/player_dodge_aura.png     1 行 4 帧，单帧 48×64
+ *   剑影连斩·剑气 assets/images/effects/player_jianying.png      4 行（右/左/下/上）× 6 帧，单帧 96×96，循环
+ *   剑影连斩·命中 assets/images/effects/player_jianying_hit.png  1 行 6 帧，单帧 96×96
  */
 
 /**
@@ -38,6 +40,7 @@ class CombatEffect {
      * @param {Object} [config.offset] - 相对跟随对象的偏移 {x, y}
      * @param {string} [config.layer='over'] - 绘制层：'under' | 'over'
      * @param {string} [config.shape] - 程序化表现形状：'aura_ring' | 'aura_glow' | 'burst' | 'orb'
+     *        | 'sword_qi' | 'ring_expand' | 'chain'（渡厄使「控制」命中时的玩家头顶锁链）
      * @param {string} [config.color] - 程序化表现主色（#RRGGBB）
      */
     constructor(config = {}) {
@@ -183,6 +186,15 @@ class CombatEffect {
             case 'orb':
                 this._drawOrb(ctx, progress);
                 break;
+            case 'sword_qi':
+                this._drawSwordQi(ctx, progress);
+                break;
+            case 'ring_expand':
+                this._drawExpandRing(ctx, progress);
+                break;
+            case 'chain':
+                this._drawChain(ctx, progress);
+                break;
             case 'burst':
             default:
                 this._drawBurst(ctx, progress);
@@ -260,6 +272,129 @@ class CombatEffect {
         }
     }
 
+    /**
+     * 剑影连斩的剑气：沿飞行方向拉长的剑形光刃（美术缺图时的程序化表现）
+     * 朝向由 CombatProjectile.render 写入 tailDirection（= 飞行方向向量）
+     */
+    _drawSwordQi(ctx, progress) {
+        const travel = this.tailDirection || { x: 1, y: 0 };
+        const angle = Math.atan2(travel.y, travel.x);
+        const length = Math.max(this.frameWidth, this.frameHeight) * (0.62 + 0.10 * Math.sin(progress * Math.PI));
+        const halfWidth = Math.max(4, this.frameHeight * 0.14);
+
+        ctx.save();
+        ctx.rotate(angle);
+
+        // 外发光（沿剑身铺开，尾部渐隐）
+        const glow = ctx.createLinearGradient(-length / 2, 0, length / 2, 0);
+        glow.addColorStop(0, CombatEffect.colorWithAlpha(this.color, 0));
+        glow.addColorStop(0.5, CombatEffect.colorWithAlpha(this.color, 0.28));
+        glow.addColorStop(1, CombatEffect.colorWithAlpha(this.color, 0.42));
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, length / 2, halfWidth * 2.2, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 剑身：细长菱形，前端（飞行方向）最亮，尾部透明
+        const body = ctx.createLinearGradient(-length / 2, 0, length / 2, 0);
+        body.addColorStop(0, CombatEffect.colorWithAlpha(this.color, 0));
+        body.addColorStop(0.55, CombatEffect.colorWithAlpha(this.color, 0.55));
+        body.addColorStop(0.9, CombatEffect.colorWithAlpha('#ffffff', 0.9));
+        body.addColorStop(1, CombatEffect.colorWithAlpha('#ffffff', 0.95));
+        ctx.fillStyle = body;
+        ctx.beginPath();
+        ctx.moveTo(length / 2, 0);
+        ctx.lineTo(0, halfWidth);
+        ctx.lineTo(-length / 2, 0);
+        ctx.lineTo(0, -halfWidth);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.restore();
+    }
+
+    /**
+     * 命中特效：以命中点为圆心、透明渐变并不断扩大的圆
+     * （剑影连斩命中时的程序化表现；美术图到位后自动改用精灵图）
+     */
+    _drawExpandRing(ctx, progress) {
+        const maxRadius = Math.max(this.frameWidth, this.frameHeight) * 0.5;
+        const radius = maxRadius * (0.25 + 0.75 * progress);
+        const alpha = Math.max(0, 1 - progress);      // 越扩越透明
+
+        // 渐变圆：圆心几乎透明 → 中段彩色光晕 → 边缘亮环 → 最外圈透明
+        const gradient = ctx.createRadialGradient(0, 0, radius * 0.12, 0, 0, radius);
+        gradient.addColorStop(0, CombatEffect.colorWithAlpha(this.color, 0.05 * alpha));
+        gradient.addColorStop(0.55, CombatEffect.colorWithAlpha(this.color, 0.42 * alpha));
+        gradient.addColorStop(0.88, CombatEffect.colorWithAlpha('#ffffff', 0.5 * alpha));
+        gradient.addColorStop(1, CombatEffect.colorWithAlpha(this.color, 0));
+
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 外圈亮环：随扩大逐渐变细、变淡
+        ctx.strokeStyle = CombatEffect.colorWithAlpha('#ffffff', 0.55 * alpha);
+        ctx.lineWidth = Math.max(1, 3 * alpha);
+        ctx.beginPath();
+        ctx.arc(0, 0, radius * 0.96, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+
+    /**
+     * 渡厄使「控制」命中：玩家头顶的锁链（32×32 规格，程序化表现）
+     * 两个互相扣住的链环 + 暖色光晕；美术图（effects.boss_due_chain）到位后自动改用精灵图
+     */
+    _drawChain(ctx, progress) {
+        const size = Math.min(this.frameWidth, this.frameHeight);
+        const pulse = 0.86 + 0.14 * Math.abs(Math.sin(this.spin * 1.6));
+
+        // 锁链的光晕（限制在 32×32 内）
+        const glow = ctx.createRadialGradient(0, 0, 1, 0, 0, size * 0.5);
+        glow.addColorStop(0, CombatEffect.colorWithAlpha(this.color, 0.40 * pulse));
+        glow.addColorStop(1, CombatEffect.colorWithAlpha(this.color, 0));
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(0, 0, size * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 两个斜向交叠的链环
+        const linkW = size * 0.40;
+        const linkH = size * 0.62;
+        [-1, 1].forEach(side => {
+            ctx.save();
+            ctx.translate(side * size * 0.13, side * size * 0.09);
+            ctx.rotate(side * 0.45);
+
+            ctx.strokeStyle = CombatEffect.colorWithAlpha(this.color, 0.95);
+            ctx.lineWidth = Math.max(2, size * 0.12);
+            ctx.beginPath();
+            ctx.ellipse(0, 0, linkW / 2, linkH / 2, 0, 0, Math.PI * 2);
+            ctx.stroke();
+
+            ctx.strokeStyle = CombatEffect.colorWithAlpha('#ffffff', 0.55 * pulse);
+            ctx.lineWidth = Math.max(1, size * 0.05);
+            ctx.beginPath();
+            ctx.ellipse(
+                0, 0,
+                Math.max(1, linkW / 2 - size * 0.07),
+                Math.max(1, linkH / 2 - size * 0.07),
+                0, 0, Math.PI * 2
+            );
+            ctx.stroke();
+
+            ctx.restore();
+        });
+
+        // 顶部锁扣（暗示“缚住”）
+        ctx.strokeStyle = CombatEffect.colorWithAlpha('#ffffff', 0.7 * pulse);
+        ctx.lineWidth = Math.max(1.5, size * 0.08);
+        ctx.beginPath();
+        ctx.arc(0, -size * 0.34, size * 0.11, Math.PI * 0.15, Math.PI * 0.85);
+        ctx.stroke();
+    }
+
     /** 弹体：发光灵息球（带朝向拖尾） */
     _drawOrb(ctx, progress) {
         const radius = this.frameWidth * 0.34;
@@ -310,8 +445,9 @@ class CombatEffect {
 }
 
 /**
- * 灵息弹（投射物）
- * 直线飞行；超过最大飞行距离自行消失；命中判定由 PlayerCombatSystem 负责。
+ * 投射物（灵息弹 / 剑影连斩的剑气）
+ * 直线飞行；超过最大飞行距离自行消失；帧序列循环播放（剑气 4 行 × 6 帧循环）；
+ * 命中判定由 PlayerCombatSystem 负责（命中后立即消失并生成命中特效）。
  */
 class CombatProjectile {
     /**
@@ -328,6 +464,9 @@ class CombatProjectile {
      * @param {Object} [config.directionRows] - 方向 → 行号
      * @param {number} [config.fps=12] - 播放帧率
      * @param {string} [config.color] - 程序化表现主色
+     * @param {string} [config.shape='orb'] - 程序化表现形状：'orb'（灵息球）| 'sword_qi'（剑气）
+     * @param {string} [config.label] - 战斗日志用的技能名（命中时随伤害一起结算）
+     * @param {Object} [config.hitEffect] - 命中特效配置（技能自带；缺省用灵息弹命中特效）
      */
     constructor(config = {}) {
         this.name = config.name || 'lingxidan';
@@ -341,6 +480,9 @@ class CombatProjectile {
         this.damage = config.damage || 15;
         this.radius = config.radius || 14;
         this.color = config.color || '#7fd8ff';
+        this.shape = config.shape || 'orb';
+        this.label = config.label || '';
+        this.hitEffect = config.hitEffect || null;
 
         this.spriteSheet = config.spriteSheet || null;
         this.frameWidth = config.frameWidth || 32;
@@ -446,7 +588,7 @@ class CombatProjectile {
                 frameWidth: this.frameWidth,
                 frameHeight: this.frameHeight,
                 frameCount: this.frameCount,
-                shape: 'orb',
+                shape: this.shape,
                 color: this.color,
                 position: this.position,
             });

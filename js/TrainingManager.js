@@ -55,16 +55,26 @@ class TrainingManager {
         this.completedCount = 0;
         // 玩家附近正在提示的 zone
         this.nearbyZone = null;
+        // 本次训练对应的任务目标 target（第一章为 'basic'，第二章剑修试炼为 'sword'）
+        this.currentTarget = 'basic';
+        this.currentLabel = '基础训练';
     }
 
     /**
      * 开始基础训练
-     * 在中央广场 (1040,600) 附近创建 4 个训练目标
      * @param {Function} onComplete - 全部完成时的回调
+     * @param {Object} [options] - 可选项
+     * @param {Array} [options.layout] - 教学圈布局（缺省 = 青岚浮野中央广场的 BASIC_TRAINING_LAYOUT；
+     *                                    第二章云渡泽的剑修试炼用 Chapter2Config.getSwordTrainingLayout()）
+     * @param {string} [options.target] - 完成后要推进的任务目标 target（缺省 'basic'）
+     * @param {string} [options.label] - 日志用名称
      */
-    startBasicTraining(onComplete) {
+    startBasicTraining(onComplete, options = {}) {
+        const layout = Array.isArray(options.layout) && options.layout.length > 0
+            ? options.layout
+            : TrainingManager.BASIC_TRAINING_LAYOUT;
 
-        this.zones = TrainingManager.BASIC_TRAINING_LAYOUT.map(config => new TrainingZone({
+        this.zones = layout.map(config => new TrainingZone({
             id: config.id,
             name: config.name,
             position: config.position,
@@ -78,11 +88,14 @@ class TrainingManager {
         this.completedCount = 0;
         this.nearbyZone = null;
         this.isActive = true;
+        // 本次训练要推进的任务目标（Main.onAllCompleted 读取）
+        this.currentTarget = options.target || 'basic';
+        this.currentLabel = options.label || '基础训练';
         if (onComplete) {
             this.onAllCompleted = onComplete;
         }
 
-        console.log('[TrainingManager] 基础训练开始，4个目标已放置在中央广场 (1040,600) 附近');
+        console.log(`[TrainingManager] ${this.currentLabel} 开始，${this.zones.length} 个目标已放置`);
     }
 
     /**

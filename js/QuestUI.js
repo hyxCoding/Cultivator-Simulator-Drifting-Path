@@ -37,6 +37,15 @@ class QuestUI {
         this.rewardColor = config.rewardColor || '#FF5722';
         this.lineHeight = config.lineHeight || this.fontSize * 1.6;
         
+        // ========== 文本排版 ==========
+        // 面板内每行文字最多 280px：任务标题 / 描述 / 目标进度超出都自动换行
+        this.maxLineWidth = config.maxLineWidth || 280;
+        // 标题在 padding.top 基础上再下移的像素（避让面板顶部的装饰纹样）
+        this.titleOffsetY = config.titleOffsetY !== undefined ? config.titleOffsetY : 20;
+        // 续行缩进：换行后的文字对齐在上一行文字下方（而不是对齐在 ✓ / □ 符号下方），
+        // 描述行也整体内缩这么多，换行宽度同步扣除，保证每行（含缩进）都落在 280px 内
+        this.continuationIndent = config.continuationIndent !== undefined ? config.continuationIndent : 16;
+        
         // ========== 状态 ==========
         this.isVisible = false;
         
@@ -168,10 +177,14 @@ class QuestUI {
         ctx.fillStyle = this.titleColor;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
-        ctx.fillText(
+        // 标题：padding.top 基础上再下移 titleOffsetY（当前 20px），仍按 280px 上限换行
+        this.drawWrappedText(
+            ctx,
             '任  务  记  录',
             this.x + this.width / 2,
-            this.y + this.padding.top
+            this.y + this.padding.top + this.titleOffsetY,
+            this.maxLineWidth,
+            this.lineHeight
         );
     }
 
@@ -181,7 +194,7 @@ class QuestUI {
     renderQuestList(ctx) {
         const quests = this.getDisplayQuests();
         const leftX = this.x + this.padding.left + 90; // 整体X +30
-        const maxWidth = this.width - this.padding.left - this.padding.right - 30;
+        const maxWidth = this.maxLineWidth; // 每行最多 280px（超出自动换行）
         let currentY = this.y + this.padding.top + this.titleFontSize + 12 + 80; // 整体Y -20
 
         if (quests.length === 0) {
@@ -207,22 +220,30 @@ class QuestUI {
             // ——— 任务标题 ———
             ctx.font = `bold ${this.fontSize + 2}px ${this.font}`;
             ctx.fillStyle = isCompleted ? '#888888' : this.titleColor;
-            ctx.fillText(
+            // 任务标题：超过 280px 自动换行（续行缩进对齐标题文字）
+            currentY = this.drawWrappedText(
+                ctx,
                 (isCompleted ? '✓ ' : '□ ') + quest.title,
                 leftX,
-                currentY
+                currentY,
+                maxWidth,
+                this.lineHeight,
+                this.continuationIndent
             );
-            currentY += this.lineHeight;
 
             // ——— 任务描述 ———
             if (quest.description) {
                 ctx.font = `${this.fontSize - 2}px ${this.font}`;
                 ctx.fillStyle = isCompleted ? '#aaaaaa' : '#666666';
-                const descLines = this.wrapText(ctx, quest.description, maxWidth);
-                for (const line of descLines) {
-                    ctx.fillText(line, leftX + 16, currentY);
-                    currentY += this.lineHeight - 2;
-                }
+                // 任务描述：整体内缩 continuationIndent，换行宽度同步扣除
+                currentY = this.drawWrappedText(
+                    ctx,
+                    quest.description,
+                    leftX + this.continuationIndent,
+                    currentY,
+                    maxWidth - this.continuationIndent,
+                    this.lineHeight - 2
+                );
             }
 
             // ——— 任务目标进度：仅显示已完成的 + 第一个未完成的 ———
@@ -233,22 +254,28 @@ class QuestUI {
                     // 已完成 → 始终显示（灰色/绿色）
                     if (objective.completed) {
                         ctx.fillStyle = isCompleted ? '#aaaaaa' : this.completedColor;
-                        ctx.fillText(
+                        currentY = this.drawWrappedText(
+                            ctx,
                             `  ✓ ${objective.description} (${objective.progress}/${objective.count})`,
                             leftX,
-                            currentY
+                            currentY,
+                            maxWidth,
+                            this.lineHeight,
+                            this.continuationIndent
                         );
-                        currentY += this.lineHeight;
                     } else if (!hasShownIncomplete) {
                         // 第一个未完成 → 显示
                         hasShownIncomplete = true;
                         ctx.fillStyle = isCompleted ? '#aaaaaa' : this.textColor;
-                        ctx.fillText(
+                        currentY = this.drawWrappedText(
+                            ctx,
                             `  □ ${objective.description} (${objective.progress}/${objective.count})`,
                             leftX,
-                            currentY
+                            currentY,
+                            maxWidth,
+                            this.lineHeight,
+                            this.continuationIndent
                         );
-                        currentY += this.lineHeight;
                     }
                     // 后续的未完成目标不显示
                 }
@@ -283,14 +310,22 @@ class QuestUI {
 
     /**
      * 文本自动换行
+     * @param {CanvasRenderingContext2D} ctx - Canvas上下文
+     * @param {string} text - 待排版文本
+     * @param {number} maxWidth - 首行最大像素宽度（任务栏固定 280px）
+     * @param {number} continueIndent - 续行缩进像素：续行会右移该距离，
+     *                                  可排版宽度也同步扣减，保证整行（含缩进）不超过 maxWidth
+     * @returns {Array<string>} 每行文字
      */
-    wrapText(ctx, text, maxWidth) {
+    wrapText(ctx, text, maxWidth, continueIndent = 0) {
         const lines = [];
         let currentLine = '';
         
         for (const char of text) {
+            // 首行可用 maxWidth；已经换过行 → 续行右移 indent，可排版宽度相应变小
+            const limit = lines.length === 0 ? maxWidth : maxWidth - continueIndent;
             const testLine = currentLine + char;
-            if (ctx.measureText(testLine).width > maxWidth && currentLine.length > 0) {
+            if (ctx.measureText(testLine).width > limit && currentLine.length > 0) {
                 lines.push(currentLine);
                 currentLine = char;
             } else {
@@ -303,6 +338,28 @@ class QuestUI {
         }
         
         return lines;
+    }
+
+    /**
+     * 按最大宽度绘制（自动换行的）一段文字，返回绘制完成后的 Y 坐标
+     * 任务标题 / 任务描述 / 目标进度统一走这里，保证面板内每行最多 280px
+     * @param {CanvasRenderingContext2D} ctx - Canvas上下文
+     * @param {string} text - 待绘制文本
+     * @param {number} x - 首行绘制 X（续行会再右移 continueIndent）
+     * @param {number} startY - 首行绘制 Y
+     * @param {number} maxWidth - 单行最大像素宽度（含缩进）
+     * @param {number} lineStep - 行高步进（像素）
+     * @param {number} continueIndent - 续行缩进像素（默认 0 = 续行与首行左对齐）
+     * @returns {number} 绘制结束后的 Y（可直接用于下一段排版）
+     */
+    drawWrappedText(ctx, text, x, startY, maxWidth, lineStep, continueIndent = 0) {
+        const lines = this.wrapText(ctx, text, maxWidth, continueIndent);
+        let currentY = startY;
+        for (let i = 0; i < lines.length; i++) {
+            ctx.fillText(lines[i], x + (i === 0 ? 0 : continueIndent), currentY);
+            currentY += lineStep;
+        }
+        return currentY;
     }
 
     /**

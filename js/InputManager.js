@@ -208,6 +208,9 @@ class InputManager {
             ...this.keyMappings.skill2,
             ...this.keyMappings.skill3,
             ...this.keyMappings.ultimate,
+            // 界面 / 调试快捷键：世界地图（M，见 Main.handleKeyDown）、碰撞覆盖层（F2）
+            // 不写进 keyMappings —— 旧存档反序列化会整体覆盖 keyMappings，写死可避免缺字段
+            'm', 'f2',
         ];
         
         return allGameKeys.includes(key);

@@ -51,12 +51,16 @@ class MapManager {
 
     /**
      * 切换当前地图
+     * 说明（世界地图频繁传送）：离开的地图只置为非活动（静默），不销毁、不释放资源 ——
+     * 地图实例继续留在 this.maps 中，图片由 ResourceManager 缓存，下次切回直接复用。
+     * 静默的实现：isActive=false 后 GameMap.render / updateSceneAnimations 立即返回，
+     * 且 GameLoop / Main 只遍历 currentMap 的 NPC、法阵、调查点等实体。
      * @param {string} mapId - 目标地图ID
      * @param {Object} player - 玩家实例
      * @returns {Promise<GameMap>} 切换后的地图实例
      */
     async switchMap(mapId, player) {
-        // 停用当前地图
+        // 停用当前地图（保留实例与已加载资源，仅停止更新与渲染）
         if (this.currentMap) {
             this.currentMap.deactivate();
         }

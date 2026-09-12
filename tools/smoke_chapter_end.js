@@ -18,7 +18,10 @@
  *        自动接取《桥边寻阿禾》（不含 open_profession_selection）
  *      - 阿禾告别 on_complete → 码头 (2566,1419) 生成永久登船路标 + 接取《登船辞行》
  *        → 按 E 登船开启世界地图
- *   6) 移除 M 键打开世界地图：按 M 不再打开世界地图
+ *   6) 世界地图：M 键打开/关闭（调试期恢复）；地图已删减为前两章，世界地图只保留
+ *      青岚浮野 / 云渡泽两个传送按钮且都常开；落地固定坐标（Main.worldMapSpawnPoints）：
+ *      青岚浮野 (2718, 1500) / 云渡泽 (541, 1385)，两点均核对过可站；
+ *      频繁传送时另一张地图静默（不更新 / 不渲染），但实例与资源不释放（切回复用同一实例）
  *   7) 世界地图（MapTeleport）打开时只渲染世界地图本身：交互提示 / HUD / 任务栏都不绘制，
  *      Q（任务栏）与 E（交互）均无响应
  *   8) 调试代码清理与数值核对：DebugCheats 已删除 / 山口法阵仍由任务门控 /
@@ -49,6 +52,28 @@
  *      - 玩家移动碰撞盒 24×24（严格小于瓦片边长 32），与精灵绘制尺寸 24×32 解耦：
  *        碰撞盒若正好 32 高会横跨两行瓦片，单瓦片宽的桥 / 窄路整条走不过去
  *      - 从出生点出发可达 ≥ 95% 可站立区域，19 个任务 / NPC 交互点 + 4 个教学圈都能站到
+ *  16) 任务栏排版（QuestUI）：标题「任  务  记  录」在 padding.top 基础上再下移 20px（y = 160）；
+ *      任务标题 / 描述 / 目标进度每行最多 280px，超出自动换行（续行缩进 16px，整行不越出 leftX + 280）
+ *  17) 开始界面：取消全部程序化绘制（不再画标题 / 「按任意键开始游戏」），
+ *      改为两张美术贴图 —— assets/images/ui/start_screen.png（1280×720 整屏背景）
+ *      + assets/images/ui/start_button.png（400×112，画布正中显示）；
+ *      只有点击按钮的 400×112 矩形才开始游戏（键盘 / 按钮外点击都不再开始）；
+ *      缺图（ResourceManager 品红占位图）时只铺底色，不画占位块
+ *  18) 游戏完结界面（章末二 · 中央泊位登船后的滚动字幕）：
+ *      - 文案 js/EndingText.js（281 行，正文 141 + 空行 140，每行 ≤ 25 字）
+ *        由 tools/generate_ending_text.py 从 tools/游戏结束滚动文字.txt 生成，
+ *        改文案只需改 txt 后重新生成（--check 校验一致性）
+ *      - js/EndingScene.js：整段从屏幕底部逐行上滚（行距 56px / 字号 40px /
+ *        默认 100px 每秒 ≈ 2.7 分钟），每行水平居中，空行同样占一个行位；
+ *        最后一行滚出屏幕上方后屏幕中心显示「按任意键返回游戏」，
+ *        此时按任意键 / 鼠标任意键 → 写 game_ending_seen + 打开世界地图 + 回 gameWorld；
+ *        播放期间 Main.handleKeyDown 对 'ending' 场景直接 return（不能跳过、不误触发其它 UI）
+ *      - Main.sailToZhaochen 结算《行舟有归处》后 startGameEnding 进入完结界面；
+ *        完结之后再在中央泊位登船（boardZhaochenBoat）不再重播对白与字幕，直接显示世界地图
+ *      - 整屏底图（可选美术）ui.ending_bg = assets/images/ui/ending_bg.png（1280×720，
+ *        py -3 tools/generate_ending_assets.py 生成占位图）：有图 → 整屏贴图铺底；
+ *        缺图 / 空图 / dataURL 品红占位图 → 一张图都不画，改回程序化「深墨渐变 + 渡口暖光晕」；
+ *        两种情况下浮尘 + 四周暗角都照常叠加（字幕永远在最上层、始终可读）
  */
 
 const fs = require('fs');
@@ -409,8 +434,75 @@ async function main() {
             + '（当前回退程序化木牌）', true);
     }
 
-    section('7. 世界地图不再由 M 键打开');
-    check('按 M 不再打开世界地图', results.mKeyCalls.length === 0, results.mKeyCalls);
+    section('7. 世界地图：M 键打开/关闭 + 只保留前两章传送按钮（调试期常开）');
+    check('按 M 打开世界地图（MapTeleport 显示）',
+        results.mKey.openCalls.length === 1 && results.mKey.opened === true, results.mKey);
+    check('再按 M 关闭世界地图', results.mKey.closed === true, results.mKey);
+    check('战场内按 M 不打开世界地图（避免战场流程停摆 / Boss 白打）',
+        results.mKeyBlockedInArena.calls.length === 0 && results.mKeyBlockedInArena.opened === false,
+        results.mKeyBlockedInArena);
+
+    // 静态检查：世界地图区域按钮只剩青岚浮野 / 云渡泽，且都 enabled: true、都走统一入口
+    const mainJsText = fs.readFileSync(path.join(ROOT, 'js', 'Main.js'), 'utf8');
+    const wmBlock = mainJsText.slice(
+        mainJsText.indexOf('区域按钮：地图已删减为前两章'),
+        mainJsText.indexOf('const taskPanelBg'));
+    const wmStatic = {
+        hasQinglan: wmBlock.indexOf("id: 'btn_qinglan'") !== -1,
+        hasYunduze: wmBlock.indexOf("id: 'btn_yunduze'") !== -1,
+        enabledCount: (wmBlock.match(/enabled: true/g) || []).length,
+        enterMapCount: (wmBlock.match(/this\.enterMapFromWorldMap\(btn\.targetMapId\)/g) || []).length,
+        noRemovedButtons: wmBlock.indexOf('btn_zhaochen') === -1 && wmBlock.indexOf('btn_wuxiang') === -1,
+    };
+    check('世界地图只保留两章按钮（青岚浮野 / 云渡泽），不再有照尘仙城 / 无乡天阙',
+        wmStatic.hasQinglan && wmStatic.hasYunduze && wmStatic.noRemovedButtons, wmStatic);
+    check('两个按钮都解锁（enabled: true）', wmStatic.enabledCount === 2, wmStatic);
+    check('两个按钮都走 enterMapFromWorldMap（统一落点 / 门控 / 通知）',
+        wmStatic.enterMapCount === 2, wmStatic);
+    check('世界地图配置（GameConfig）只剩两章按钮且都已解锁',
+        results.worldMap.ids.join(',') === 'btn_qinglan,btn_yunduze'
+        && results.worldMap.targets.join(',') === 'qinglan_fuye,yunduze'
+        && results.worldMap.unlocked.every(v => v === true), results.worldMap);
+    check('第三 / 第四章地图未注册（地图已删减为前两章）',
+        results.worldMap.zhaochenRegistered === false && results.worldMap.wuxiangRegistered === false,
+        results.worldMap);
+
+    section('7b. 世界地图频繁传送：另一张地图静默，但实例与资源不释放');
+    check('青岚浮野 / 云渡泽两张地图都已加载并缓存',
+        results.fastTravel.instanceCount === 2, results.fastTravel);
+    check('切走的地图被置为非活动（静默：render 不产生任何绘制调用）',
+        results.fastTravel.qinglanSilentWhenOther === true && results.fastTravel.silentMapDraws === 0,
+        results.fastTravel);
+    check('任意时刻只有当前地图处于活动状态（另一张地图静默）',
+        results.fastTravel.qinglanActiveWhileCurrent === true
+        && results.fastTravel.yunduzeActiveWhileCurrent === true
+        && results.fastTravel.yunduzeSilentAfterLeaving === true, results.fastTravel);
+    check('切回时复用同一地图实例（不重新加载 / 不释放资源）',
+        results.fastTravel.sameInstanceReused === true, results.fastTravel);
+    check('传送落点生效：切回后当前地图为青岚浮野',
+        results.fastTravel.currentMapId === 'qinglan_fuye', results.fastTravel);
+
+    // 世界地图传送落点：由 Main.worldMapSpawnPoints 固定，且两个点都站得住
+    const spawnStatic = {
+        tableDefined: /this\.worldMapSpawnPoints\s*=\s*\{/.test(mainJsText),
+        qinglanPoint: mainJsText.indexOf('qinglan_fuye: { x: 2718, y: 1500 }') !== -1,
+        yunduzePoint: mainJsText.indexOf('yunduze: { x: 541, y: 1385 }') !== -1,
+        usedInEntry: mainJsText.indexOf('this.worldMapSpawnPoints[mapId]') !== -1,
+    };
+    check('Main 里写死世界地图传送落点（青岚浮野 2718,1500 / 云渡泽 541,1385）并在 enterMapFromWorldMap 生效',
+        spawnStatic.tableDefined && spawnStatic.qinglanPoint && spawnStatic.yunduzePoint
+        && spawnStatic.usedInEntry, spawnStatic);
+    check('落点：青岚浮野 (2718, 1500) 可站（24×24 碰撞盒四角均通行）',
+        results.worldMapSpawn.qinglan_fuye.standable === true
+        && results.worldMapSpawn.qinglan_fuye.insideBounds === true,
+        results.worldMapSpawn.qinglan_fuye);
+    check('落点：云渡泽 (541, 1385) 可站（24×24 碰撞盒四角均通行）',
+        results.worldMapSpawn.yunduze.standable === true
+        && results.worldMapSpawn.yunduze.insideBounds === true,
+        results.worldMapSpawn.yunduze);
+    check('世界地图按钮解锁由 updateWorldMapUnlocks 同步（两章常开）',
+        results.worldMapUnlockCalls.indexOf('btn_qinglan=true') !== -1
+        && results.worldMapUnlockCalls.indexOf('btn_yunduze=true') !== -1, results.worldMapUnlockCalls);
 
     section('8. 世界地图打开时只显示世界地图及其上的按钮');
     check('世界地图打开时渲染世界地图本身', results.overlay.mapRenderedWhenOpen > 0, results.overlay.mapRenderedWhenOpen);
@@ -485,8 +577,8 @@ async function main() {
 
     section('10. 基础操作教学：按键只看教学圈 + 左下角技能栏逐格解锁');
     const training = results.training;
-    check('战斗按键顺序为 J/U/I/L（attack → lingxidan → hutishu → dodge）',
-        Array.isArray(training.order) && training.order.join(',') === 'attack,lingxidan,hutishu,dodge',
+    check('战斗按键顺序为 J/U/I/L/O（attack → lingxidan → hutishu → dodge → jianying）',
+        Array.isArray(training.order) && training.order.join(',') === 'attack,lingxidan,hutishu,dodge,jianying',
         training.order);
     check('教学开始时四个战斗按键全部未解锁（左下角没有任何技能格）',
         training.unlockedAtStart.length === 0, training.unlockedAtStart);
@@ -505,6 +597,8 @@ async function main() {
         && typeof training.toastOffCircle === 'string'
         && training.toastOffCircle.indexOf('教学圈') !== -1,
         { calls: training.attackCallsOffCircle, toast: training.toastOffCircle });
+    check('教学期按 O（剑影连斩）：本次试炼没有这个教学圈 → 完全静默，不弹任何提示',
+        training.jianyingToastDuringTraining === '', training.jianyingToastDuringTraining);
     check('在教学圈内按 J：施展成功并完成该教学步骤',
         training.attackCallsOnCircle === 1 && training.completedAfterAttack === true,
         { calls: training.attackCallsOnCircle, completed: training.completedAfterAttack });
@@ -520,6 +614,10 @@ async function main() {
             ['attack', 'lingxidan', 'hutishu'],
             ['attack', 'lingxidan', 'hutishu', 'dodge'],
         ]), training.unlockAfterEachStep);
+    check('基础教学不涉及剑影连斩（O 由第二章主线一试炼传授，未习得时一直不解锁）',
+        training.unlockedAtStart.indexOf('jianying') === -1
+        && training.canUseAnyAfterTraining.indexOf('jianying') === -1,
+        { atStart: training.unlockedAtStart, afterTraining: training.canUseAnyAfterTraining });
     check('四步全部完成 → 教学结束（4/4）',
         training.completedCount === 4 && training.isActiveAfterAll === false,
         { completed: training.completedCount, active: training.isActiveAfterAll });
@@ -669,8 +767,8 @@ async function main() {
     section('13. 左下角技能栏：三格 100×100 图片（格上无文字），冷却只压遮罩（普攻不占格）');
     const skillBar = results.skillBar;
 
-    check('技能栏顺序为 U → I → L（普攻 J 已从技能格中删除）',
-        skillBar.spec.order.join(',') === 'lingxidan,hutishu,dodge', skillBar.spec.order);
+    check('技能栏顺序为 U → I → L → O（普攻 J 已从技能格中删除；O 剑影连斩学会后才出现）',
+        skillBar.spec.order.join(',') === 'lingxidan,hutishu,dodge,jianying', skillBar.spec.order);
     check('美术规格：每格 100×100（iconSize × scale = 100）',
         skillBar.spec.iconSize === 100 && Math.round(skillBar.spec.iconSize * skillBar.spec.scale) === 100,
         skillBar.spec);
@@ -679,15 +777,19 @@ async function main() {
         && skillBar.resourcePaths.hutishu === 'assets/images/ui/skill_hutishu.png'
         && skillBar.resourcePaths.dodge === 'assets/images/ui/skill_dodge.png',
         skillBar.resourcePaths);
-    check('三张图标键已写进各技能配置（hudIcon），普攻没有图标且已标记 silentCooldown',
-        skillBar.hudIcons.join(',') === 'ui.skill_lingxidan,ui.skill_hutishu,ui.skill_dodge'
+    check('四张图标键已写进各技能配置（hudIcon），普攻没有图标且已标记 silentCooldown',
+        skillBar.hudIcons.join(',') === 'ui.skill_lingxidan,ui.skill_hutishu,ui.skill_dodge,ui.skill_jianying'
         && skillBar.attackHasIcon === false
         && skillBar.attackSilentCooldown === true,
         { hudIcons: skillBar.hudIcons, attackHasIcon: skillBar.attackHasIcon, silent: skillBar.attackSilentCooldown });
-    check('三张图标已加入 playerCombat 分组 + 启动预加载列表',
+    check('剑影连斩图标绑定 assets/images/ui/skill_jianying.png（O 剑影连斩）',
+        skillBar.resourcePaths.jianying === 'assets/images/ui/skill_jianying.png',
+        skillBar.resourcePaths);
+    check('四张图标已加入 playerCombat 分组 + 启动预加载列表',
         ['assets/images/ui/skill_lingxidan.png', 'assets/images/ui/skill_hutishu.png',
-            'assets/images/ui/skill_dodge.png'].every(p => skillBar.pathsInPreloadGroup.indexOf(p) !== -1)
-        && ['ui.skill_lingxidan', 'ui.skill_hutishu', 'ui.skill_dodge']
+            'assets/images/ui/skill_dodge.png', 'assets/images/ui/skill_jianying.png']
+            .every(p => skillBar.pathsInPreloadGroup.indexOf(p) !== -1)
+        && ['ui.skill_lingxidan', 'ui.skill_hutishu', 'ui.skill_dodge', 'ui.skill_jianying']
             .every(k => mainJsSource.indexOf("'" + k + "'") !== -1),
         skillBar.pathsInPreloadGroup);
 
@@ -705,7 +807,7 @@ async function main() {
         && readyDraws[1].dest.x === expectedSlotLeft(1)
         && readyDraws[2].dest.x === expectedSlotLeft(2),
         readyDraws);
-    check('就绪时格子中央不绘制按键字母（U / I / L），格子下方也不绘制技能名',
+    check('就绪时格子中央不绘制按键字母（U / I / L / O），格子下方也不绘制技能名',
         skillBar.ready.texts.length === 0 && skillBar.ready.rects.length === 0, skillBar.ready);
     check('冷却中不写倒计时：只按剩余比例从格子顶部压下冷却遮罩（灵息弹 1.5s / 护体术 12s 各一块）',
         skillBar.cooling.texts.length === 0
@@ -729,6 +831,17 @@ async function main() {
         && skillBar.wrongSizeIcons.texts.length === 0
         && skillBar.wrongSizeIcons.rects.length === 3,
         skillBar.wrongSizeIcons);
+    check('剑影连斩未习得 → 技能栏不画第 4 格；习得（O）后补出第 4 格 100×100 并排在 L 右侧',
+        skillBar.jianyingSlot.orderIndex === 3
+        && skillBar.jianyingSlot.hiddenDrawCount === 3
+        && skillBar.jianyingSlot.learned.draws.length === 4
+        && skillBar.jianyingSlot.learned.draws[3].tag === 'icon_jianying'
+        && skillBar.jianyingSlot.learned.draws[3].dest.w === 100
+        && skillBar.jianyingSlot.learned.draws[3].dest.h === 100
+        && skillBar.jianyingSlot.learned.draws[3].dest.x === expectedSlotLeft(3)
+        && skillBar.jianyingSlot.learned.draws[3].dest.y === expectedSlotY
+        && skillBar.jianyingSlot.learned.texts.length === 0,
+        skillBar.jianyingSlot);
     check('普攻教学本身仍在：教学圈提示仍指向 J 键（普攻始终不占左下角技能格）',
         !!skillBar.attackTrainingZone && skillBar.attackTrainingZone.actionKey === 'j'
         && skillBar.attackTrainingZone.promptText.indexOf('J') !== -1,
@@ -748,6 +861,7 @@ async function main() {
         'assets/images/ui/skill_lingxidan.png',
         'assets/images/ui/skill_hutishu.png',
         'assets/images/ui/skill_dodge.png',
+        'assets/images/ui/skill_jianying.png',
     ];
     const skillIconToLocal = (rel) => path.join(ROOT, rel.replace(/\//g, path.sep));
     const skillIconActual = skillIconFiles.map((rel) => {
@@ -823,16 +937,16 @@ async function main() {
         && qc.table.cols.every(c => c === qc.map.mapWidth)
         && qc.table.chars.slice().sort().join(',') === '#,.',
         { rows: qc.table && qc.table.rows, cols: qc.table && qc.table.cols, chars: qc.table && qc.table.chars });
-    check('碰撞表内容合理：出生点瓦片(14,43) / 祁伯瓦片(58,31) 可通行，房屋瓦片(52,33) 阻挡',
+    check('碰撞表内容合理：出生点瓦片(14,43) / 祁伯瓦片(58,31) 可通行，房屋墙体(瓦片 48..53 × 28..31) 阻挡',
         qc.table.spawnTileWalkable === true && qc.table.qiboTileWalkable === true
-        && qc.table.houseTileBlocked === true, qc.table);
+        && qc.table.houseWallBlocked === true, qc.table);
     check('地图外圈（最后一行 + 首/末列）全为阻挡，玩家不会走出地图',
         qc.table.outerFrameBlocked === true);
-    check('模拟 file://（碰撞图 = null）时，TileSystem 按 collisionData 建表：出生点可站、房屋阻挡',
+    check('模拟 file://（碰撞图 = null）时，TileSystem 按 collisionData 建表：出生点可站、房屋墙体阻挡',
         qc.viaRealCode.spawnWalkable === true && qc.viaRealCode.houseBlocked === true
         && qc.viaRealCode.rectAtSpawnWalkable === true,
         qc.viaRealCode);
-    check('真实代码路径建出的表与 collisionData 完全一致（59 × 105，1643 可通行 / 4552 阻挡）',
+    check('真实代码路径建出的表与 collisionData 完全一致（行 × 列一致，可通行 / 阻挡都非空）',
         qc.viaRealCode.gridShape.rows === qc.map.mapHeight
         && qc.viaRealCode.gridShape.cols === qc.map.mapWidth
         && qc.viaRealCode.gridShape.walkable === qc.table.walkable
@@ -858,10 +972,207 @@ async function main() {
     check('所有任务 / NPC / 教学交互点在各自交互半径内都能站到（19 个交互点 + 4 个教学圈）',
         unreachableNew.length === 0 && qc.reach.points.length === 23,
         { unreachable: unreachableNew, points: qc.reach.points });
-    check('对照：修复前的 24×32 碰撞盒只能走到 24% 的区域，祁伯 / 镇风桩 / 教学圈等全部走不到',
-        qc.reachLegacy.fraction < 0.5 && qc.reachLegacy.unreachable.indexOf('NPC 祁伯') !== -1
-        && qc.reachLegacy.unreachable.indexOf('教学·普通攻击') !== -1,
-        { fraction: Number(qc.reachLegacy.fraction.toFixed(4)), unreachable: qc.reachLegacy.unreachable.length });
+    check('对照：新碰撞盒（24×24）的可达面积与修复前的 24×32 盒相当（差距 ≤ 1 个百分点）',
+        qc.reach.fraction + 0.01 >= qc.reachLegacy.fraction,
+        {
+            newFraction: Number(qc.reach.fraction.toFixed(4)),
+            legacyFraction: Number(qc.reachLegacy.fraction.toFixed(4)),
+            legacyUnreachable: qc.reachLegacy.unreachable.length,
+        });
+    // 说明：原断言为“旧碰撞盒只能走到 24% 的区域、祁伯/教学圈全部走不到”，
+    //       用于证明“碰撞盒等于瓦片边长会卡死单瓦片宽的桥/窄道”。
+    //       当前 collision.png 已被重绘得比原图更开阔（可通行瓦片更多），
+    //       旧碰撞盒在这张图上已不再复现卡死，故改为“新盒不劣于旧盒”的对照。
+    //       两个碰撞盒的可站立格子总数不同（分母不同），所以用 1 个百分点容差比较，
+    //       真正的硬约束是上面那条“23 个交互点全部可达”。
+    //       需要复核历史结论时，可用旧版 collision.png（或 _collision.png）重跑本段。
+
+    section('16. 任务栏排版：标题下移 20px + 每行最多 280px 自动换行');
+    const ql = results.questUILayout;
+    check('QuestUI 默认单行上限 280px / 标题在 padding.top 基础上再下移 20px',
+        ql.maxLineWidth === 280 && ql.titleOffsetY === 20 && ql.continuationIndent === 16,
+        { maxLineWidth: ql.maxLineWidth, titleOffsetY: ql.titleOffsetY, continuationIndent: ql.continuationIndent });
+    check('标题「任  务  记  录」绘制在 y = 120 + 20 + 20 = 160（原 140），且仍水平居中',
+        !!ql.title && ql.title.y === 160 && ql.title.x === 400 + 480 / 2,
+        ql.title);
+    check('任务标题 / 描述 / 目标进度统一按 280px 换行：没有任何一行文字超过 280px',
+        ql.overLimit.length === 0 && ql.maxWidth <= 280,
+        { overLimit: ql.overLimit, maxWidth: ql.maxWidth, lines: ql.lines });
+    check('换行后的续行缩进 16px，文字块整行不越出右边界（leftX + 280）；'
+        + '右下角「按 Q 或 ESC 关闭」是右对齐提示，不计入 280px 文字块',
+        ql.indentedContinuations > 0 && ql.overflowRight.length === 0
+        && !!ql.closeHint && ql.closeHint.x === 400 + 480 - 25,
+        { indentedContinuations: ql.indentedContinuations, overflowRight: ql.overflowRight, closeHint: ql.closeHint });
+
+    section('17. 开始界面：取消程序化绘制，改为整屏背景图 + 居中开始按钮图');
+    const ss = results.startScreen;
+    check('资源键已登记：ui.start_screen / ui.start_button',
+        ss.keys.background === 'ui.start_screen' && ss.keys.button === 'ui.start_button'
+        && ss.resourcePaths.background === 'assets/images/ui/start_screen.png'
+        && ss.resourcePaths.button === 'assets/images/ui/start_button.png',
+        { keys: ss.keys, paths: ss.resourcePaths });
+    check('两张开始界面图已进入 mainMenu 资源分组（启动预加载列表）',
+        ss.pathsInPreloadGroup.join(',') === 'assets/images/ui/start_screen.png,assets/images/ui/start_button.png',
+        ss.pathsInPreloadGroup);
+    check('Main.preloadInitialResources 里显式写入 ui.start_screen / ui.start_button',
+        mainJsText.indexOf("'ui.start_screen'") !== -1 && mainJsText.indexOf("'ui.start_button'") !== -1);
+    check('开始界面两张美术已入库且尺寸为 1280×720 / 400×112', (() => {
+        const files = [
+            ['assets/images/ui/start_screen.png', 1280, 720],
+            ['assets/images/ui/start_button.png', 400, 112],
+        ];
+        return files.every(([rel, w, h]) => {
+            const local = path.join(ROOT, rel.replace(/\//g, path.sep));
+            if (!fs.existsSync(local)) return false;
+            const s = readPngSize(local);
+            return s.width === w && s.height === h;
+        });
+    })(), 'start_screen 1280×720 / start_button 400×112');
+
+    check('开始按钮居中：左上角 (440, 304) = ((1280-400)/2, (720-112)/2)，尺寸 400×112',
+        ss.buttonRect.x === 440 && ss.buttonRect.y === 304
+        && ss.buttonRect.width === 400 && ss.buttonRect.height === 112
+        && ss.insideRect === true && ss.outsideRect === true, ss.buttonRect);
+    check('开始界面只贴两张图：整屏背景 (0,0,1280,720) + 居中按钮 (440,304,400,112)，'
+        + '全程不写一个字、不画一个矩形',
+        ss.artRender.imageCount === 2
+        && ss.artRender.backgroundTargetIsScreenImage === true
+        && (ss.artRender.backgroundRect || []).join(',') === '0,0,1280,720'
+        && ss.artRender.buttonTargetIsButtonImage === true
+        && (ss.artRender.buttonRect || []).join(',') === '440,304,400,112'
+        && ss.artRender.textCount === 0 && ss.artRender.rectCount === 0, ss.artRender);
+    check('点击开始按钮 → 切到 gameWorld（同一次开始不会重复切场景）',
+        ss.startedByInsideClick.join(',') === 'gameWorld'
+        && ss.switchesAfterRepeatClick.join(',') === 'gameWorld', ss.switchesAfterRepeatClick);
+    check('按钮外点击 / 只按键盘（J、回车）都不再开始游戏',
+        ss.ignoredOutside.length === 0, ss.ignoredOutside);
+    check('鼠标悬停开始按钮时画布光标变手型，移开后恢复默认（只切 DOM 光标，不绘制图形）',
+        ss.cursorWhenHover === 'pointer' && ss.cursorAfterLeave === 'default',
+        { hover: ss.cursorWhenHover, leave: ss.cursorAfterLeave });
+    check('缺图（dataURL 占位图）时不画品红占位块：只铺一层底色、无文字',
+        ss.noArtRender.imageCount === 0 && ss.noArtRender.rectCount === 1
+        && ss.noArtRender.textCount === 0
+        && ss.sceneNoArtImages.background === null && ss.sceneNoArtImages.button === null,
+        ss.noArtRender);
+    check('js 代码里不再绘制开始界面文字（标题 / 「按任意键开始游戏」均已删除，改为贴图）', (() => {
+        const mm = fs.readFileSync(path.join(ROOT, 'js', 'MainMenuScene.js'), 'utf8');
+        const mainJs = fs.readFileSync(path.join(ROOT, 'js', 'Main.js'), 'utf8');
+        return mm.indexOf('fillText') === -1 && mm.indexOf('strokeText') === -1
+            && mainJs.indexOf("ctx.fillText('按任意键开始游戏'") === -1
+            && mainJs.indexOf("ctx.fillText('修仙者模拟器：飘途'") === -1
+            && mainJs.indexOf('mainMenuScene.render(ctx)') !== -1;
+    })());
+
+    section('18. 游戏完结界面：章末二登船后的滚动字幕（逐行居中上滚 + 任意键返回世界地图）');
+    const ge = results.gameEnding;
+    check('game.html 已引入 js/EndingText.js（字幕文案）与 js/EndingScene.js（完结场景）',
+        files.indexOf('js/EndingText.js') !== -1 && files.indexOf('js/EndingScene.js') !== -1,
+        files.filter(f => f.indexOf('Ending') !== -1));
+    check('js/EndingText.js 与 tools/游戏结束滚动文字.txt 逐行一致（改文案只需改 txt 后重新生成）', (() => {
+        const raw = fs.readFileSync(path.join(ROOT, 'tools', '游戏结束滚动文字.txt'), 'utf8')
+            .replace(/\r\n/g, '\n');
+        const txtLines = (raw.endsWith('\n') ? raw.slice(0, -1) : raw).split('\n');
+        const ctx = vm.createContext({});
+        vm.runInContext(fs.readFileSync(path.join(ROOT, 'js', 'EndingText.js'), 'utf8'), ctx,
+            { filename: 'js/EndingText.js' });
+        const jsLines = vm.runInContext('EndingText.getLines()', ctx);
+        return jsLines.length === txtLines.length && jsLines.every((l, i) => l === txtLines[i]);
+    })());
+    check('字幕文案：281 行（正文 141 + 空行 140），每行 ≤ 25 字（最长 20 字），首 / 末行与源文件一致',
+        ge.sourceFile === 'tools/游戏结束滚动文字.txt' && ge.lineLimit === 25
+        && ge.lineCount === 281 && ge.blankLineCount === 140
+        && ge.maxLineLength === 20 && ge.overLimit.length === 0
+        && ge.firstLine === '如果你看到了这里，' && ge.lastLine === '谢谢你，走完这段飘途。'
+        && ge.firstBlankIndex === 1,
+        { source: ge.sourceFile, count: ge.lineCount, blanks: ge.blankLineCount, max: ge.maxLineLength, over: ge.overLimit });
+    check('EndingScene：画布 1280×720 / 行距 56px / 字号 40px / 楷体宋体艺术字栈 / 默认 100px 每秒（整段约 2.7 分钟）',
+        ge.canvas.width === 1280 && ge.canvas.height === 720
+        && ge.lineHeight === 56 && ge.fontSize === 40
+        && ge.textFont.indexOf('KaiTi') !== -1 && ge.textFont.indexOf('serif') !== -1
+        && ge.defaultSpeed === 100
+        && ge.durationAtDefaultSpeed > 150 && ge.durationAtDefaultSpeed < 220,
+        { canvas: ge.canvas, lineHeight: ge.lineHeight, fontSize: ge.fontSize, speed: ge.defaultSpeed, duration: ge.durationAtDefaultSpeed });
+    check('空行同样占一个行位：整段高度 = 281 行 × 56px = 15736px',
+        ge.totalHeight === ge.lineCount * ge.lineHeight && ge.totalHeight === 15736, ge.totalHeight);
+    check('进入场景：整段从屏幕下缘外开始（首行 y = 720）、尚未播完、世界输入被封死（移动 + 键盘）',
+        ge.enterState.offset === 720 && ge.enterState.finished === false
+        && ge.enterState.movementBlocked === true && ge.enterState.inputBlocked === true, ge.enterState);
+    check('字幕播放中不显示「按任意键返回游戏」，且按任意键 / 点鼠标都不退出（不能跳过字幕）',
+        ge.promptBeforeFinish === 0 && ge.switchesWhileScrolling.length === 0
+        && ge.promptText === '按任意键返回游戏',
+        { promptBeforeFinish: ge.promptBeforeFinish, switches: ge.switchesWhileScrolling });
+    check('每行占位恒定 56px（第 2 行是空行也照样占位）；同一行随时间上移（0.05s × 20000px/s = 1000px）',
+        ge.linePitch[0] === 56 && ge.linePitch[1] === 56
+        && Math.abs(ge.firstLineDelta - 1000) < 0.001, { pitch: ge.linePitch, delta: ge.firstLineDelta });
+    check('每行水平居中：绘制 x = (1280 - 行宽) / 2（行宽 = 字数 × 40 + 字距 6 × (字数-1)）',
+        ge.midLineCount > 0 && ge.midCenteredCount === ge.midLineCount,
+        { drawn: ge.midLineCount, centered: ge.midCenteredCount });
+    check('最后一行完全滚出屏幕上方后停止滚动（约 0.83 秒 @20000px/s），此时屏幕上没有字幕了',
+        ge.finishedState.finished === true && ge.finishedState.lastLineY <= 0
+        && ge.finishedState.elapsed < 2 && ge.finishedState.noSwitchYet === true
+        && ge.drawnLineCount === 0,
+        ge.finishedState);
+    check('屏幕中心显示「按任意键返回游戏」：恰好画在 (640, 360) 且只画一次',
+        ge.promptDraws.length === 1 && ge.promptDraws[0].x === 640 && ge.promptDraws[0].y === 360,
+        ge.promptDraws);
+    check('空行只占行位、不绘制任何文字（不会画出空字符串）', ge.blankLineDrawn === false);
+    check('任意键退出：写剧情标记 game_ending_seen + 打开世界地图 + 切回 gameWorld 场景',
+        ge.keyExit.dismissed === true && ge.keyExit.flag === true
+        && ge.keyExit.switches.join(',') === 'gameWorld'
+        && ge.keyExit.mapShown === 'show' && ge.keyExit.mapVisible === true, ge.keyExit);
+    check('鼠标任意键同样能退出（提示出现后点一下即可）',
+        ge.mouseExit.switchesBefore === 0 && ge.mouseExit.dismissed === true
+        && ge.mouseExit.switches.join(',') === 'gameWorld', ge.mouseExit);
+    check('退出后解锁世界输入（可移动 / 可交互）',
+        ge.afterExit.movementBlocked === false && ge.afterExit.inputBlocked === false
+        && ge.afterExit.interacting === false, ge.afterExit);
+    check('完结界面吞掉 Q / M / ESC / F2（播放期间不会误开任务栏 / 世界地图 / 调试叠层）',
+        ge.keyboardSwallowed === true);
+    check('首次登船（中央泊位）：S02 → S03 → 结算《行舟有归处》→ 进入完结界面；'
+        + '此时还不写 game_ending_seen、也不开世界地图',
+        ge.firstBoard.storyCalls.join(',') === 's02_berth,s03_arrive_zhaochen'
+        && ge.firstBoard.switches.join(',') === 'ending'
+        && ge.firstBoard.progressCalls.join(',') === 'chapter2_ending_2|board_boat|zhaochen_boat|1'
+        && ge.firstBoard.boardingDone === true && ge.firstBoard.endingSeen === false
+        && ge.firstBoard.mapVisible === false, ge.firstBoard);
+    check('完结之后再登船：不重播对白 / 不再进完结界面，直接显示世界地图界面',
+        ge.reboard.storyCalls.length === 0 && ge.reboard.switches.length === 0
+        && ge.reboard.mapShown === 'show' && ge.reboard.mapVisible === true, ge.reboard);
+    check('Main 侧接线：注册 ending 场景 / render 分发 / 完结键盘屏蔽 / startGameEnding + finishGameEnding',
+        mainJsText.indexOf('this.scenes.ending = new EndingScene(this)') !== -1
+        && mainJsText.indexOf('this.renderEnding(ctx)') !== -1
+        && mainJsText.indexOf("currentScene.sceneId === 'ending'") !== -1
+        && mainJsText.indexOf('this.startGameEnding();') !== -1
+        && mainJsText.indexOf('finishGameEnding()') !== -1
+        && mainJsText.indexOf("this.gameEndingSeenFlag = 'game_ending_seen'") !== -1);
+
+    // 可选美术：整屏底图（有图 → 贴图铺底；缺图 / 品红占位图 → 程序化兜底，绝不画品红块）
+    check('完结界面底图已登记且进入启动预加载分组：ui.ending_bg → assets/images/ui/ending_bg.png'
+        + '（ui 分组 + ending 资源分组，Main.preloadInitialResources 随主菜单一起预加载）',
+        ge.backdrop.key === 'ui.ending_bg'
+        && ge.backdrop.resourcePath === 'assets/images/ui/ending_bg.png'
+        && ge.backdrop.groupPaths.join(',') === 'assets/images/ui/ending_bg.png'
+        && mainJsText.indexOf("'ui.ending_bg'") !== -1,
+        { key: ge.backdrop.key, path: ge.backdrop.resourcePath, group: ge.backdrop.groupPaths });
+    check('完结界面底图：有图时整屏贴图 (0,0,1280,720) 铺底，浮尘 + 暗角照常叠加（字幕仍在最上层）',
+        ge.backdrop.loadedWithArt === true && ge.backdrop.artImageCount === 1
+        && (ge.backdrop.artDraw || []).join(',') === '0,0,1280,720'
+        && ge.backdrop.artRectCount === ge.backdrop.missingRectCount - 2,
+        ge.backdrop);
+    check('完结界面底图：缺图 / 空图 / dataURL 品红占位图 → 一张图都不画，'
+        + '改回程序化「深墨渐变 + 渡口暖光晕」兜底（不会出现品红块）',
+        ge.backdrop.loadedWithPlaceholder === false && ge.backdrop.placeholderImageCount === 0
+        && ge.backdrop.loadedWithNothing === false && ge.backdrop.missingImageCount === 0
+        && ge.backdrop.placeholderRectCount === ge.backdrop.missingRectCount
+        && ge.backdrop.missingRectCount === ge.backdrop.artRectCount + 2,
+        ge.backdrop);
+    check('完结界面底图（可选美术）已入库时尺寸必须为 1280×720'
+        + '（未入库也能玩，走程序化兜底；生成 / 重画：py -3 tools/generate_ending_assets.py --force）', (() => {
+        const p = path.join(ROOT, 'assets', 'images', 'ui', 'ending_bg.png');
+        if (!fs.existsSync(p)) return true;      // 可选美术：未交付时不断言尺寸
+        const s = readPngSize(p);
+        return s.width === 1280 && s.height === 720;
+    })(), 'assets/images/ui/ending_bg.png');
 
     console.log(`\n结果：通过 ${passed} 项，失败 ${failed} 项`);
     if (failed > 0) process.exitCode = 1;

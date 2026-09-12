@@ -27,7 +27,7 @@ class GameConfig {
             jianxiu: {
                 tangfeng:{id:'tangfeng',name:'踏风斩',type:'active',profession:'jianxiu',unlockStage:'zhuji',description:'朝指定方向短距突进并斩击',manaCost:20,cooldown:5,damage:25,dashDistance:150,maxLevel:3,upgradeCost:[1,2]},
                 guiyi:{id:'guiyi',name:'归刃',type:'active',profession:'jianxiu',unlockStage:'zhuji',description:'掷出灵剑再回收',manaCost:25,cooldown:6,damage:30,range:250,maxLevel:3,upgradeCost:[1,2]},
-                jianying:{id:'jianying',name:'剑影连斩',type:'active',profession:'jianxiu',unlockStage:'jiedan',description:'对前方连续斩击',manaCost:40,cooldown:10,damage:60,range:120,maxLevel:3,upgradeCost:[1,2]},
+                jianying:{id:'jianying',name:'剑影连斩',type:'active',profession:'jianxiu',unlockStage:'jiedan',description:'在角色的上下左右四个方向各生成一道剑气，命中敌人后消散',manaCost:30,cooldown:15,damage:30,range:240,projectileSpeed:360,maxLevel:3,upgradeCost:[1,2]},
                 wanjian:{id:'wanjian',name:'万剑归宗',type:'ultimate',profession:'jianxiu',unlockStage:'yuanying',description:'在选定区域落下剑雨',manaCost:80,cooldown:30,damage:150,range:300,areaRadius:100,maxLevel:3,upgradeCost:[1,2]},
             },
             faxiu: {
@@ -77,12 +77,12 @@ class GameConfig {
         this.respecCost = { zhuji:600, jiedan:1200, yuanying:2400 };
         this.repeatableQuestRewards = { lianqi:50, zhuji:200, jiedan:400, yuanying:800 };
         this.maps = {
+            // 世界地图（M 键打开）：地图已删减为前两章，只保留青岚浮野 / 云渡泽两个传送按钮。
+            // unlocked 只用于存档 / 数据自检；调试期两个按钮都常开（点击即传送）。
             worldMap:{ id:'worldMap',name:'九州总图',type:'worldMap',
                 buttons:[
                     {id:'btn_qinglan',x:150,y:180,width:80,height:80,targetMap:'qinglan_fuye',unlocked:true},
-                    {id:'btn_yunduze',x:380,y:150,width:80,height:80,targetMap:'yunduze',unlocked:false},
-                    {id:'btn_zhaochen',x:600,y:220,width:80,height:80,targetMap:'zhaochen_xiancheng',unlocked:false},
-                    {id:'btn_wuxiang',x:450,y:350,width:80,height:80,targetMap:'wuxiang_tianque',unlocked:false},
+                    {id:'btn_yunduze',x:380,y:150,width:80,height:80,targetMap:'yunduze',unlocked:true},
                 ],
             },
         };

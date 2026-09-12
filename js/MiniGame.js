@@ -14,6 +14,15 @@ class MiniGame {
         this.name = config.name || '小游戏';
         this.resources = config.resources || { images: {}, audio: {} };
         
+        // ========== 玩家精灵显示尺寸（与大地图一致） ==========
+        // 大地图 Player 的精灵帧是 32×32，绘制时按 Player.width*2 × Player.height*2
+        // = 48×64 输出（见 js/Player.js 的 render）。小游戏里如果按 32×32 原尺寸画，
+        // 角色会比大地图小一圈 → 统一在这里给出显示尺寸，各小游戏渲染玩家时都用它。
+        // 注意：这只是「画多大」，不与走位碰撞盒（player.width/height，约 22×26）挂钩；
+        // 《逆流送灯》画的是小船而不是角色，不适用本约定。
+        this.playerSpriteWidth = 48;
+        this.playerSpriteHeight = 64;
+
         // 状态
         this.isRunning = false;
         this.isPaused = false;
@@ -22,7 +31,8 @@ class MiniGame {
         
         // 计时
         this.gameTimer = 0;
-        this.timeLimit = config.timeLimit || 60; // 时间限制（秒）
+        // 时间限制（秒）：0 = 不限时（如第二章「认灯归魂」），故不能用 || 兜底
+        this.timeLimit = config.timeLimit !== undefined ? config.timeLimit : 60;
         
         // 得分
         this.score = 0;

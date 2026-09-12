@@ -42,6 +42,7 @@ class GameMap {
         this.monsters = new Map(); // 怪物实例 {id: monsterInstance}
         this.arenaBoss = null;     // 战场 Boss 引用（摄风山魈，主线四）
         this.arenaBossDefeated = false; // 战场 Boss 是否已被击败（击败后本图不再生成 Boss）
+        this.arenaIntroLock = false;    // 战前对白期间是否冻结战场 Boss（只站桩：不移动 / 不出手）
         this.teleporters = new Map(); // 传送法阵实例 {id: TeleportArray}
         this.pickupItems = new Map(); // 可拾取物品 {id: PickupItem}
         this.signposts = new Map();   // 路标 {id: Signpost}
@@ -121,6 +122,8 @@ class GameMap {
                         extraAnimations: npcConfig.extraAnimations || [],
                         initialNpcState: npcConfig.initialNpcState || {},
                         baseAnimations: npcConfig.baseAnimations || {},
+                        // 显示缩放（缺省 2；第二章新美术为 2 倍像素密度，配置里写 1）
+                        displayScale: npcConfig.displayScale,
                     });
                     
                     this.npcs.set(npcId, npc);
@@ -161,6 +164,12 @@ class GameMap {
 
                 // 摄风山魈（主线四战场）：使用专属 AI（行为树 + 轴对齐寻路 + 打断规则）
                 if (bossPosition.monsterId === 'boss_shanxiao' || bossPosition.ai === 'shanxiao') {
+                    this.spawnArenaBoss(bossKey, bossPosition);
+                    continue;
+                }
+
+                // 渡厄使（第二章万灯台战场）：召唤小兵 + 冲刺 + 控制（见 js/DueBoss.js）
+                if (bossPosition.monsterId === 'boss_due' || bossPosition.ai === 'due') {
                     this.spawnArenaBoss(bossKey, bossPosition);
                     continue;
                 }
@@ -206,8 +215,16 @@ class GameMap {
                     anchor: teleportConfig.anchor || 'center',
                     // 任务门控：任务未接取时法阵不显示（由 updateQuestGate 刷新）
                     questRequired: teleportConfig.questRequired || null,
+                    // 目标门控（可选）：任务接取 + 指定目标已完成，法阵才可见
+                    // （例：万灯台石台法阵要先向许录取得通行凭证 —— talk_to:xulu）
+                    requireObjective: teleportConfig.requireObjective || null,
                     // 战场入口（主线四：死亡/胜利后回到法阵旁）
                     bossArena: teleportConfig.bossArena === true,
+                    // 战场流程参数（第二章渡厄使战场复用同一套流程；缺省回落到第一章默认值）
+                    arenaDefeatFlag: teleportConfig.arenaDefeatFlag || null,
+                    arenaVictory: teleportConfig.arenaVictory || null,
+                    arenaResourceGroup: teleportConfig.arenaResourceGroup || null,
+                    arenaReturnMapId: teleportConfig.arenaReturnMapId || null,
                     isActive: teleportConfig.isActive !== false,
                 });
 
@@ -230,6 +247,10 @@ class GameMap {
                     imageWidth: signpostConfig.imageWidth || null,
                     imageHeight: signpostConfig.imageHeight || null,
                     questRequired: signpostConfig.questRequired || null,
+                    // 目标门控（可选）：任务接取 + 指定目标已完成，路标才可见
+                    requireObjective: signpostConfig.requireObjective || null,
+                    // 开小游戏前的引导对白（可选，见 Main.handleInteraction）
+                    roleplayDialogue: signpostConfig.roleplayDialogue || null,
                     gameId: signpostConfig.gameId || null,
                     oneShot: signpostConfig.oneShot ?? false,
                 });
@@ -255,10 +276,14 @@ class GameMap {
                     imageWidth: pileConfig.imageWidth || 58,
                     imageHeight: pileConfig.imageHeight || 128,
                     anchor: pileConfig.anchor || 'bottom',
+                    // 缺图时是否画程序化占位桩体（false → 不画“代码画的柱子”，交互照旧）
+                    showPlaceholderBody: pileConfig.showPlaceholderBody,
                     questId: pileConfig.questId || null,
                     objectiveType: pileConfig.objectiveType || 'investigate',
                     objectiveTarget: pileConfig.objectiveTarget || null,
                     dialogue: pileConfig.dialogue || null,
+                    // 调查完成后一并发放的剧情物品（如万灯台台后的账册 / 命令）
+                    grantItems: pileConfig.grantItems || [],
                 });
 
                 this.windPiles.set(windPile.id, windPile);
@@ -426,20 +451,29 @@ class GameMap {
      * 生成战场 Boss
      * 与普通怪物并列存放在 monsters 中，便于 GameLoop 统一 update / render；
      * 额外用 this.arenaBoss 记录引用，供战斗结算与战后清理使用。
+     *
+     * 按 bossConfig.ai / monsterId 选择实现类：
+     *   'shanxiao' / boss_shanxiao → 摄风山魈（第一章，js/ShanxiaoBoss.js）
+     *   'due'      / boss_due      → 渡厄使（第二章，js/DueBoss.js）
      * @param {string} bossKey - 地图配置中的键
      * @param {Object} bossConfig - 配置：瓦片坐标 {x, y} + monsterId + tuning
-     * @returns {ShanxiaoBoss|null}
+     * @returns {Object|null}
      */
     spawnArenaBoss(bossKey = 'boss_shanxiao', bossConfig = {}) {
-        if (typeof ShanxiaoBoss !== 'function') {
-            console.warn('[GameMap] 未找到 ShanxiaoBoss 类，跳过战场 Boss 生成');
+        const isDue = bossConfig.ai === 'due' || bossConfig.monsterId === 'boss_due';
+        const BossClass = isDue
+            ? (typeof DueBoss === 'function' ? DueBoss : null)
+            : (typeof ShanxiaoBoss === 'function' ? ShanxiaoBoss : null);
+
+        if (!BossClass) {
+            console.warn(`[GameMap] 未找到战场 Boss 类（${isDue ? 'DueBoss' : 'ShanxiaoBoss'}），跳过生成`);
             return null;
         }
 
         // 已被击败过 → 本图不再生成 Boss（由 Main 在进场时按剧情标记设置）
         // 说明：战败未击败的情况不在此列，玩家可再次进场重试。
         if (this.arenaBossDefeated) {
-            console.log('[GameMap] 摄风山魈已被击败，本次进场不再生成 Boss');
+            console.log(`[GameMap] 战场 Boss 已被击败，本次进场不再生成`);
             return null;
         }
 
@@ -448,22 +482,32 @@ class GameMap {
             this.clearArenaBoss();
         }
 
-        const worldPosition = this.tileToWorld(bossConfig.x, bossConfig.y);
-        const boss = new ShanxiaoBoss({
+        const worldPosition = bossConfig.worldPosition
+            ? { x: bossConfig.worldPosition.x, y: bossConfig.worldPosition.y }
+            : this.tileToWorld(bossConfig.x, bossConfig.y);
+
+        const boss = new BossClass({
             id: bossKey,
-            monsterId: bossConfig.monsterId || 'boss_shanxiao',
+            monsterId: bossConfig.monsterId || (isDue ? 'boss_due' : 'boss_shanxiao'),
             position: worldPosition,
-            tuning: bossConfig.tuning || {},
+            tuning: Object.assign({}, bossConfig.tuning || {}),
+            isArenaBoss: true,
         });
 
         boss.tilePosition = { x: bossConfig.x, y: bossConfig.y };
         boss.isBoss = true;
         boss.map = this;
 
+        // 战前对白期间生成（或重新生成）的 Boss 直接进入冻结状态（见 setArenaIntroLock）
+        if (this.arenaIntroLock && typeof boss.setIntroLock === 'function') {
+            boss.setIntroLock(true);
+        }
+
         this.monsters.set(bossKey, boss);
         this.arenaBoss = boss;
 
-        console.log(`[GameMap] 摄风山魈已生成 (${Math.round(worldPosition.x)}, ${Math.round(worldPosition.y)})`);
+        console.log(`[GameMap] 战场 Boss ${boss.name || bossKey} 已生成 `
+            + `(${Math.round(worldPosition.x)}, ${Math.round(worldPosition.y)})`);
         return boss;
     }
 
@@ -495,24 +539,76 @@ class GameMap {
     }
 
     /**
+     * 战前对白期间冻结 / 解冻战场 Boss
+     *
+     * 背景：第二章进万灯台时 Boss 会随地图载入立即生成，而进场要先把 B01 战前对白读完
+     * （此时玩家被锁输入）。若不冻结，Boss 会在对白里追上来出手，玩家只能挨打。
+     * 冻结状态由本方法传导到 Boss 自身的 introLock（见 DueBoss.setIntroLock）：
+     * 只站在原地、不移动也不造成任何伤害；对白读完 Main.startArenaFight 会置 false 解冻。
+     * @param {boolean} [locked=true] - true=冻结（对白期间）/ false=解冻（正式开战）
+     */
+    setArenaIntroLock(locked = true) {
+        this.arenaIntroLock = !!locked;
+
+        if (this.arenaBoss && typeof this.arenaBoss.setIntroLock === 'function') {
+            this.arenaBoss.setIntroLock(this.arenaIntroLock);
+        }
+
+        console.log(`[GameMap] 战场 Boss ${this.arenaIntroLock ? '已冻结（战前对白）' : '已解冻'}`);
+    }
+
+    /**
+     * 把战场 Boss 从场上摘下（保留资源缓存，不调用 destroy）
+     *
+     * 用途：第二章进场要「读完 B01 对白才开战」，而 Boss 是随地图载入生成的 ——
+     * 对白开始前先用本方法把 Boss 撤下，对白读完 ensureArenaBoss 再生成，
+     * 画面与战斗节奏都与设计一致。
+     * 与 clearArenaBoss 的差别：不释放精灵图缓存，因此重新生成时不会出现空帧
+     * （进场前已由 Main.preloadBossArenaImages 预加载过）。
+     * @returns {boolean} 是否撤下了 Boss
+     */
+    detachArenaBoss() {
+        if (!this.arenaBoss) return false;
+
+        const boss = this.arenaBoss;
+        this.arenaBoss = null;
+        this.monsters.delete(boss.id);
+
+        if (typeof boss.clearTarget === 'function') {
+            boss.clearTarget();
+        }
+        if (typeof boss.setIntroLock === 'function') {
+            boss.setIntroLock(true);    // 万一被重新挂回场上也保持冻结，直到 startFight
+        }
+        console.log('[GameMap] 战场 Boss 已撤下（战前对白期间不上场）');
+        return true;
+    }
+
+    /**
      * 确保战场 Boss 存在（玩家进场时调用）
      * Boss 在战斗结束 / 离开战场时已被清理，这里按地图配置重新生成
-     * @returns {ShanxiaoBoss|null}
+     * @returns {Object|null}
      */
     ensureArenaBoss() {
+        // 已被击败过（剧情标记 / 任务目标已完成）→ 本图不再生成 Boss
+        if (this.arenaBossDefeated) {
+            return null;
+        }
+
         if (this.arenaBoss && !this.arenaBoss.isDestroyed) {
             return this.arenaBoss;
         }
 
-        const bossConfig = this.mapConfig
-            && this.mapConfig.bossPosition
-            && this.mapConfig.bossPosition.boss_shanxiao;
-
-        if (!bossConfig) {
+        const bossConfigs = this.mapConfig && this.mapConfig.bossPosition;
+        if (!bossConfigs) {
             return null;
         }
 
-        return this.spawnArenaBoss('boss_shanxiao', bossConfig);
+        // 地图上只登记一个战场 Boss，这里取第一个（键名不再写死，兼容两张战场地图）
+        for (const key in bossConfigs) {
+            return this.spawnArenaBoss(key, bossConfigs[key]);
+        }
+        return null;
     }
 
     /**
@@ -840,13 +936,16 @@ class GameMap {
 
     /**
      * 激活地图
+     * 世界地图传送回来时复用同一实例（NPC / 法阵 / 调查点状态都还在），资源不重新加载
      */
     activate() {
         this.isActive = true;
     }
 
     /**
-     * 停用地图
+     * 停用地图（静默）
+     * 只把地图设为非活动：不再更新（updateSceneAnimations）也不再渲染，也不参与交互检测；
+     * 实例与已加载资源全部保留，便于频繁切回（见 MapManager.switchMap）
      */
     deactivate() {
         this.isActive = false;

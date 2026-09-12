@@ -41,10 +41,15 @@ class ChapterLoader {
                 gameConfig.registeredNPCConfigs = {};
             }
             for (const npcId in chapterData.npcs) {
-                if (gameConfig.registeredNPCConfigs[npcId]) {
-                    console.warn(`[ChapterLoader] NPC ${npcId} 已存在，将被覆盖`);
+                const existed = gameConfig.registeredNPCConfigs[npcId];
+                if (existed) {
+                    // 同一 NPC 出现在多章（如阿禾）：深合并，保留前一章的美术 / 商店配置，
+                    // 只把本章新增的对白、搬迁点、任务等并入（详见 _mergeConfig）
+                    gameConfig.registeredNPCConfigs[npcId] = ChapterLoader._mergeConfig(existed, chapterData.npcs[npcId]);
+                    console.log(`[ChapterLoader] NPC ${npcId} 跨章合并（保留已有美术/商店配置，并入本章内容）`);
+                } else {
+                    gameConfig.registeredNPCConfigs[npcId] = chapterData.npcs[npcId];
                 }
-                gameConfig.registeredNPCConfigs[npcId] = chapterData.npcs[npcId];
                 registeredCount++;
             }
             console.log(`[ChapterLoader] 注册 ${registeredCount} 个NPC配置 (${chapterId})`);
@@ -95,6 +100,41 @@ class ChapterLoader {
         this.loadedChapters.add(chapterId);
         console.log(`[ChapterLoader] 章节 ${chapterId} 注册完成`);
         return true;
+    }
+
+    /**
+     * 深合并两份配置（跨章共用同一个 NPC 时使用）
+     *
+     * 规则：
+     * - 纯对象：递归合并（同键以 override 为准，override 未声明的键保留 base）
+     * - 数组 / 标量 / null：直接取 override（本章声明的清单视作完整替换）
+     *
+     * 这样阿禾在第一章的 baseAnimations / shopItems / extraAnimations 会被保留，
+     * 第二章只需补写自己的对白、搬迁点、任务列表即可。
+     *
+     * @param {*} base - 先加载的配置（第一章）
+     * @param {*} override - 后加载的配置（第二章）
+     * @returns {*} 合并结果
+     */
+    static _mergeConfig(base, override) {
+        if (override === undefined) return base;
+        if (base === undefined || base === null) return override;
+
+        const baseIsPlainObject = typeof base === 'object' && !Array.isArray(base);
+        const overrideIsPlainObject = typeof override === 'object' && override !== null && !Array.isArray(override);
+
+        if (baseIsPlainObject && overrideIsPlainObject) {
+            const merged = {};
+            for (const key in base) {
+                merged[key] = base[key];
+            }
+            for (const key in override) {
+                merged[key] = ChapterLoader._mergeConfig(base[key], override[key]);
+            }
+            return merged;
+        }
+
+        return override;
     }
 
     /**

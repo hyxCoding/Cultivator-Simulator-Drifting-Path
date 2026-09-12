@@ -274,6 +274,47 @@ class QuestSystem {
     }
 
     /**
+     * 查询任务当前能否被接取（只读，不改变任何状态）
+     *
+     * 与 acceptQuest 的前置校验保持同一套规则，但把“为什么不能接”翻译成玩家可读的原因：
+     * acceptQuest 只返回布尔值 + console 警告，玩家看到的是“对话里点了接取，
+     * 任务面板里却什么都没有”。Main.tryAcceptQuest 用本方法给出提示。
+     *
+     * @param {string} questId
+     * @returns {{ ok: boolean, reason: string|null, missingPrerequisites: string[] }}
+     *          ok=true 时可接取；ok=false 时 reason 为玩家可读原因
+     */
+    getAcceptStatus(questId) {
+        const deny = (reason, missingPrerequisites = []) => ({ ok: false, reason, missingPrerequisites });
+
+        const entry = this.quests.get(questId);
+        if (!entry) return deny(`任务 ${questId} 未注册`);
+
+        const gameConfig = GameConfig.getInstance();
+        const questConfig = gameConfig.getQuest(questId);
+        if (!questConfig) return deny(`任务 ${questId} 配置不存在`);
+
+        const title = questConfig.title || questId;
+        if (entry.state === QuestSystem.STATE_ACTIVE) return deny(`《${title}》已在进行中`);
+        if (entry.state === QuestSystem.STATE_COMPLETED) return deny(`《${title}》已完成`);
+        if (entry.state === QuestSystem.STATE_FAILED) return deny(`《${title}》已失败`);
+
+        const missing = [];
+        for (const prereqId of (questConfig.prerequisites || [])) {
+            const prereq = this.quests.get(prereqId);
+            if (!prereq || prereq.state !== QuestSystem.STATE_COMPLETED) {
+                const prereqConfig = gameConfig.getQuest(prereqId);
+                missing.push(prereqConfig ? (prereqConfig.title || prereqId) : prereqId);
+            }
+        }
+        if (missing.length > 0) {
+            return deny(`需先完成《${missing.join('》《')}》`, missing);
+        }
+
+        return { ok: true, reason: null, missingPrerequisites: [] };
+    }
+
+    /**
      * 更新任务进度（仅 ACTIVE 状态的任务可更新）
      * @param {string} questId
      * @param {string} objectiveType

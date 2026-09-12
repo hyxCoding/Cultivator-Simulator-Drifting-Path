@@ -197,6 +197,30 @@ class DialogueSystem {
                     this.npc.onFoundationTrial();
                 }
                 break;
+            case 'start_sword_training':
+                // 第二章：剑修基础连招试炼（陆舟）——复用基础操作教学框架，教学圈放在云渡泽岸边空地
+                if (this.npc.onSwordTraining) {
+                    this.npc.onSwordTraining();
+                }
+                break;
+            case 'start_river_escort':
+                // 第二章：逆流送灯（陆舟）——开启「逆流送灯」横版行舟小游戏（boat_navigation）
+                if (this.npc.onRiverEscort) {
+                    this.npc.onRiverEscort();
+                }
+                break;
+            case 'start_core_formation_trial':
+                // 第二章章末：结丹调息（阿禾）——复用第一章定息规则
+                if (this.npc.onCoreTrial) {
+                    this.npc.onCoreTrial();
+                }
+                break;
+            case 'start_lantern_identify':
+                // 第二章：认灯归魂（认灯台）——开启身份核对小游戏
+                if (this.npc.onLanternIdentify) {
+                    this.npc.onLanternIdentify();
+                }
+                break;
             default:
                 if (action.startsWith('start_quest_') || action.startsWith('accept_quest_')) {
                     // 开始任务
