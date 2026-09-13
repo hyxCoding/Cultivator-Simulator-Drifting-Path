@@ -28,6 +28,11 @@ class MiniGame {
         this.isPaused = false;
         this.isCompleted = false;
         this.isFailed = false;
+        // 「胜利锁定」状态位（需求：只要检测到小游戏胜利，就直接忽略失败）
+        // 与 isCompleted 的区别：本标记在**判定到胜利条件的那一刻**就置位（早于 complete()），
+        // 且之后（含重开前的收尾阶段）任何 fail() 一律被忽略 —— 防止同一局里「成功 / 失败」
+        // 两套判断逻辑各跑一次，导致胜利与失败音效同时响（见 HerbCollectMiniGame）。
+        this.isWinLocked = false;
         
         // 计时
         this.gameTimer = 0;
@@ -55,6 +60,7 @@ class MiniGame {
         this.isPaused = false;
         this.isCompleted = false;
         this.isFailed = false;
+        this.isWinLocked = false;      // 新一局解锁（见构造函数的「胜利锁定」说明）
         this.gameTimer = 0;
         this.score = 0;
     }
@@ -95,10 +101,18 @@ class MiniGame {
 
     /**
      * 完成小游戏
+     * 同一局只结算一次：已经结算过（完成 / 失败）后调用直接返回 false。
+     * 需要这道闸是因为「两种结算可能落在同一帧」（例：乘风采药最后一株草药长在虚空上、
+     * 同帧风又停了 → 旧顺序先 fail() 再 complete()，成功 / 失败音效一起响、结算界面连开两次）。
+     * 完成即置「胜利锁定」（isWinLocked）：之后同一局的 fail() 一律被忽略。
+     * @returns {boolean} 本次调用是否真的完成了小游戏
      */
     complete() {
+        if (this.isCompleted || this.isFailed) return false;
+
         this.isRunning = false;
         this.isCompleted = true;
+        this.isWinLocked = true;      // 胜利锁定：本局不再接受任何失败判定（见构造函数说明）
         
         this.result = {
             success: true,
@@ -111,12 +125,20 @@ class MiniGame {
         if (this.onComplete) {
             this.onComplete(this.result);
         }
+        return true;
     }
 
     /**
      * 失败小游戏
+     * 同一局只结算一次（同 complete()：重复调用 / 结算后再 complete 都不再触发）。
+     * 另外：本局已经胜利（isWinLocked / isCompleted）→ 直接忽略（需求：检测到胜利就不再判失败），
+     * 否则胜利与失败音效会在同一局里各响一次。
+     * @returns {boolean} 本次调用是否真的判定了失败
      */
     fail() {
+        if (this.isWinLocked || this.isCompleted) return false;
+        if (this.isFailed) return false;
+
         this.isRunning = false;
         this.isFailed = true;
         
@@ -131,6 +153,7 @@ class MiniGame {
         if (this.onFail) {
             this.onFail(this.result);
         }
+        return true;
     }
 
     /**
@@ -189,6 +212,7 @@ class MiniGame {
             isPaused: this.isPaused,
             isCompleted: this.isCompleted,
             isFailed: this.isFailed,
+            isWinLocked: this.isWinLocked,
             gameTimer: this.gameTimer,
             score: this.score,
         };
@@ -206,6 +230,10 @@ class MiniGame {
         this.isPaused = data.isPaused || false;
         this.isCompleted = data.isCompleted || false;
         this.isFailed = data.isFailed || false;
+        // 读档兜底：已完成但旧档没有本字段时，同样视为「胜利锁定」
+        this.isWinLocked = data.isWinLocked !== undefined
+            ? !!data.isWinLocked
+            : (this.isCompleted === true);
         this.gameTimer = data.gameTimer || 0;
         this.score = data.score || 0;
     }

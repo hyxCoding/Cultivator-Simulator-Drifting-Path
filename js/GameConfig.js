@@ -3,11 +3,13 @@ class GameConfig {
     constructor() { if (GameConfig.instance) { return GameConfig.instance; } GameConfig.instance = this; this.initConfig(); }
     initConfig() {
         this.realms = {
-            // 初始（练气）：气血上限 100 / 灵息上限 50，建号时即为满值
-            LIANQI: { id:'lianqi',name:'练气',stages:['初期','中期','后期','圆满'],maxExp:100,moveSpeed:200,maxHealth:100,maxMana:50 },
-            // 筑基：第一章章末「筑基调息」完成后进入 —— 气血上限 200 / 灵息上限 100，并即时回满
-            ZHUJI: { id:'zhuji',name:'筑基',stages:['初期','中期','后期','圆满'],maxExp:200,moveSpeed:220,maxHealth:200,maxMana:100 },
-            JIEDAN: { id:'jiedan',name:'结丹',stages:['初期','中期','后期','圆满'],maxExp:400,moveSpeed:240,maxHealth:220,maxMana:100 },
+            // 初始（练气）：气血上限 150 / 灵息上限 70，建号时即为满值；灵息每秒恢复 2 点
+            LIANQI: { id:'lianqi',name:'练气',stages:['初期','中期','后期','圆满'],maxExp:100,moveSpeed:200,maxHealth:150,maxMana:70 },
+            // 筑基：第一章章末「筑基调息」完成后进入 —— 气血上限 400 / 灵息上限 250，并即时回满；灵息每秒恢复 4 点
+            ZHUJI: { id:'zhuji',name:'筑基',stages:['初期','中期','后期','圆满'],maxExp:200,moveSpeed:220,maxHealth:400,maxMana:250 },
+            // 结丹：第二章章末「结丹调息」完成后进入 —— 气血上限 1000 / 灵息上限 500，并即时回满；灵息每秒恢复 10 点
+            JIEDAN: { id:'jiedan',name:'结丹',stages:['初期','中期','后期','圆满'],maxExp:400,moveSpeed:240,maxHealth:1000,maxMana:500 },
+            // 元婴 / 化神：第三、四章尚未实现，暂留旧值（未在本次平衡调整范围内；灵息恢复沿用结丹档）
             YUANYING: { id:'yuanying',name:'元婴',stages:['初期','中期','后期','圆满'],maxExp:800,moveSpeed:260,maxHealth:300,maxMana:150 },
             HUASHEN: { id:'huashen',name:'化神',stages:['初期'],maxExp:0,moveSpeed:300,maxHealth:500,maxMana:250 },
         };
@@ -20,14 +22,14 @@ class GameConfig {
         };
         this.skills = {
             basic: {
-                lingxidan:{id:'lingxidan',name:'灵息弹',type:'basic',description:'发射单体灵力攻击',manaCost:10,cooldown:2,damage:15,range:300,projectileSpeed:400,maxLevel:3,upgradeCost:[1,2]},
-                hutishu:{id:'hutishu',name:'护体术',type:'basic',description:'获得短时护盾',manaCost:15,cooldown:8,duration:3,shieldPercent:30,maxLevel:3,upgradeCost:[1,2]},
+                lingxidan:{id:'lingxidan',name:'灵息弹',type:'basic',description:'发射单体灵力攻击',manaCost:5,cooldown:2,damage:20,range:300,projectileSpeed:400,maxLevel:3,upgradeCost:[1,2]},
+                hutishu:{id:'hutishu',name:'护体术',type:'basic',description:'获得短时护盾',manaCost:10,cooldown:8,duration:3,shieldPercent:30,maxLevel:3,upgradeCost:[1,2]},
                 huixishu:{id:'huixishu',name:'回息术',type:'basic',description:'短暂原地调息，恢复部分灵息',manaCost:0,cooldown:12,manaRestorePercent:30,channelTime:1.5,maxLevel:3,upgradeCost:[1,2]},
             },
             jianxiu: {
                 tangfeng:{id:'tangfeng',name:'踏风斩',type:'active',profession:'jianxiu',unlockStage:'zhuji',description:'朝指定方向短距突进并斩击',manaCost:20,cooldown:5,damage:25,dashDistance:150,maxLevel:3,upgradeCost:[1,2]},
                 guiyi:{id:'guiyi',name:'归刃',type:'active',profession:'jianxiu',unlockStage:'zhuji',description:'掷出灵剑再回收',manaCost:25,cooldown:6,damage:30,range:250,maxLevel:3,upgradeCost:[1,2]},
-                jianying:{id:'jianying',name:'剑影连斩',type:'active',profession:'jianxiu',unlockStage:'jiedan',description:'在角色的上下左右四个方向各生成一道剑气，命中敌人后消散',manaCost:30,cooldown:15,damage:30,range:240,projectileSpeed:360,maxLevel:3,upgradeCost:[1,2]},
+                jianying:{id:'jianying',name:'剑影连斩',type:'active',profession:'jianxiu',unlockStage:'jiedan',description:'在角色的上下左右四个方向各生成一道剑气，命中敌人后消散',manaCost:20,cooldown:15,damage:40,range:240,projectileSpeed:360,maxLevel:3,upgradeCost:[1,2]},
                 wanjian:{id:'wanjian',name:'万剑归宗',type:'ultimate',profession:'jianxiu',unlockStage:'yuanying',description:'在选定区域落下剑雨',manaCost:80,cooldown:30,damage:150,range:300,areaRadius:100,maxLevel:3,upgradeCost:[1,2]},
             },
             faxiu: {
@@ -72,12 +74,25 @@ class GameConfig {
         this.combat = {
             // 灵息（魔法值）自然恢复：每 interval 秒恢复 amount 点，上限自然封顶
             // 说明：气血只有丹药 / 剧情回复，不做自然恢复；灵息恢复不看是否移动 / 普攻 / 闪避
-            manaRegen: { interval: 2, amount: 1 },
+            // 按境界分档（byRealm）：练气 每 1 秒 2 点 → 筑基 每 1 秒 4 点 → 结丹及以后 每 1 秒 10 点
+            // 顶层 interval / amount 是兜底值（未知境界 / 旧存档缺档时使用，取练气档）
+            manaRegen: {
+                interval: 1, amount: 2,
+                byRealm: {
+                    lianqi: { interval: 1, amount: 2 },
+                    zhuji: { interval: 1, amount: 4 },
+                    jiedan: { interval: 1, amount: 10 },
+                    yuanying: { interval: 1, amount: 10 },
+                    huashen: { interval: 1, amount: 10 },
+                },
+            },
         };
         this.respecCost = { zhuji:600, jiedan:1200, yuanying:2400 };
         this.repeatableQuestRewards = { lianqi:50, zhuji:200, jiedan:400, yuanying:800 };
         this.maps = {
-            // 世界地图（M 键打开）：地图已删减为前两章，只保留青岚浮野 / 云渡泽两个传送按钮。
+            // 世界地图（九州总图）：地图已删减为前两章，只保留青岚浮野 / 云渡泽两个传送按钮。
+            // 打开方式只有剧情节点（第一章码头登船 / 章末登船）—— 原 M 键调试入口已按需求移除
+            // （第十三次改动，见 js/Main.js handleKeyDown）；关闭走 ESC。
             // unlocked 只用于存档 / 数据自检；调试期两个按钮都常开（点击即传送）。
             worldMap:{ id:'worldMap',name:'九州总图',type:'worldMap',
                 buttons:[

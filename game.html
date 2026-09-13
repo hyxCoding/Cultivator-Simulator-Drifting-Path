@@ -98,6 +98,19 @@
             transition: width 0.3s ease;
         }
         
+        #soundHint {
+            color: #8888aa;
+            font-size: 14px;
+            letter-spacing: 1px;
+            margin-top: 18px;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        
+        #soundHint.visible {
+            opacity: 1;
+        }
+        
         #errorMessage {
             color: #ff4444;
             font-size: 14px;
@@ -188,6 +201,8 @@
             <div id="loadingProgress">
                 <div id="loadingProgressBar"></div>
             </div>
+            <!-- 音频提示：浏览器要求「玩家先与页面交互」才允许出声（见 js/AudioManager.js） -->
+            <div id="soundHint">点一下画面任意处即可开启声音</div>
             <div id="errorMessage"></div>
         </div>
         
@@ -206,6 +221,9 @@
     
     <!-- 第1层：基础类 -->
     <script src="js/ResourceManager.js"></script>
+    <!-- 音频管理器（背景音乐循环 / 音效单次；音频键与文件路径登记在 ResourceManager，
+         触发点见 tools/音频资源清单.txt；缺失音频文件时静默跳过，不会报错） -->
+    <script src="js/AudioManager.js"></script>
     <script src="js/GameConfig.js"></script>
     <script src="js/CollisionDetector.js"></script>
     
@@ -226,6 +244,8 @@
     <script src="js/Animation.js"></script>
     <script src="js/AnimationManager.js"></script>
     <script src="js/Camera.js"></script>
+    <!-- 飘落物（落叶 / 落花）：图片帧动画 + 飘落轨迹的环境特效（前两章主图 / 开始界面 / 完结界面） -->
+    <script src="js/FallingFoliage.js"></script>
     
     <!-- 第4层：游戏循环 -->
     <script src="js/GameLoop.js"></script>
@@ -319,6 +339,7 @@
             const savePrompt = document.getElementById('savePrompt');
             const btnLoadSave = document.getElementById('btnLoadSave');
             const btnNewGame = document.getElementById('btnNewGame');
+            const soundHint = document.getElementById('soundHint');
             
             /**
              * 更新加载进度
@@ -327,6 +348,30 @@
                 loadingText.textContent = text;
                 progressBar.style.width = progress + '%';
             }
+            
+            // ========== 音频提示（浏览器自动播放策略）==========
+            // 浏览器要求「玩家先与页面交互」才允许带声音播放：开始界面 BGM 若已被拦下还没响，
+            // 就在加载界面提示一句；玩家一旦交互过（或音乐已经开始播）就把提示收起来。
+            // AudioManager 在构造时就绑好了交互监听 —— 加载界面上的那一次点击同样算数，
+            // 并被用来立刻补播音乐（见 js/AudioManager.js 的 handleUserGesture）。
+            let soundHintTimer = null;
+            
+            function updateSoundHint() {
+                const manager = (window.gameAudio && window.gameAudio.manager)
+                    ? window.gameAudio.manager() : null;
+                if (!manager) return;                    // AudioManager 还没加载出来：下个 tick 再看
+                
+                if (manager.hasUserGesture() || manager.isBgmPlaying()) {
+                    soundHint.classList.remove('visible');
+                    clearInterval(soundHintTimer);
+                    soundHintTimer = null;
+                    return;
+                }
+                if (manager.isBgmPending()) soundHint.classList.add('visible');
+            }
+            
+            // 300ms 轮询足够跟手，也让 AudioManager 不必反向依赖 DOM
+            soundHintTimer = setInterval(updateSoundHint, 300);
             
             /**
              * 显示错误
@@ -344,6 +389,10 @@
              */
             function hideLoading() {
                 loadingOverlay.classList.add('hidden');
+                if (soundHintTimer) {          // 关掉音频提示的轮询（游戏已经开始，提示不再需要）
+                    clearInterval(soundHintTimer);
+                    soundHintTimer = null;
+                }
                 setTimeout(() => {
                     loadingOverlay.style.display = 'none';
                 }, 500);

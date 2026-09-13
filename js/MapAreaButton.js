@@ -110,6 +110,11 @@ class MapAreaButton {
         if (!isInside && wasHovered && this.onHoverExit) {
             this.onHoverExit(this);
         }
+
+        // 鼠标滑过按钮音效（每次放到按钮上播一次；禁用按钮也可悬停 → 同样出声）
+        if (isInside && !wasHovered) {
+            gameAudio.playSfx('sfx.ui_hover');
+        }
         
         // 提示计时器
         if (this.isHovered) {
@@ -127,8 +132,12 @@ class MapAreaButton {
             }
             
             // 点击处理
-            if (isInside && mouseClicked && this.callback) {
-                this.callback(this);
+            if (isInside && mouseClicked) {
+                // 按钮点击音效（所有按钮通用）
+                gameAudio.playSfx('sfx.ui_click');
+                if (this.callback) {
+                    this.callback(this);
+                }
             }
         } else {
             this.isPressed = false;

@@ -42,6 +42,10 @@ class Signpost {
         this.requireObjective = config.requireObjective || null;
         // 开小游戏前的引导对白（可选）：按 E 后先播这段文字，读完再由 Main 启动 gameId 小游戏
         this.roleplayDialogue = config.roleplayDialogue || null;
+        // 小游戏「成功退出」后的收尾对白（可选）：读完小游戏结算回来，由 Main 播这一段
+        // （目前用于乘风采药：采齐草药回主图后主角自言自语一句，见 Main.playHerbCollectSuccessDialogue）
+        this.successDialogue = config.successDialogue || null;
+        this.successSpeaker = config.successSpeaker || null;
         this.oneShot = config.oneShot ?? false;
         this.isActivated = false;
         this.isActive = true;  // 初始可见，由 updateQuestGate 控制

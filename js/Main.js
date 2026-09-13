@@ -2,6 +2,18 @@
  * 修仙者模拟器：飘途 - 主程序
  * 整合所有系统，初始化游戏，启动主循环
  */
+// 小游戏结算回到主图后，忽略 E 键的秒数。
+// 原因：浏览器对按住的键会连发 keydown，而结算发生在「按下 E 的那一刻」（采到最后一株草药 /
+// 坠落结算），若这一路 keydown 直接落到主图的「采药点」路标上，就会把刚结束的小游戏又开一局
+// —— 玩家以为已经退出，实际小游戏还在跑（起风 BGM 又响、风停时虚空坠落再判一次失败音效）。
+const MINI_GAME_EXIT_GUARD_SECONDS = 0.5;
+
+// 乘风采药「成功退出」后的兜底收尾对白
+// 正常走 Chapter1Config 里采药点路标的 successDialogue / successSpeaker（见 Signpost.js）；
+// 路标没配时用这一句，保证「赢了之后一定有一句话」（需求：成功退出小游戏后加个对话）。
+const HERB_COLLECT_SUCCESS_DIALOGUE = '止风草齐了三份，趁着露水还重，赶紧给阿禾送去。\n风里走这一趟不算白——好歹没让这些药草空长一场。';
+const HERB_COLLECT_SUCCESS_SPEAKER = '主角: ';
+
 class Main {
     constructor() {
         // ========== Canvas ==========
@@ -67,9 +79,9 @@ class Main {
         // 之后再在中央泊位登船不再重播字幕，直接打开世界地图（见 boardZhaochenBoat）
         this.gameEndingSeenFlag = 'game_ending_seen';
 
-        // ========== 世界地图（调试期） ==========
+        // ========== 世界地图 ==========
         // 地图已删减为前两章（青岚浮野 / 云渡泽），世界地图只保留这两章的传送按钮。
-        // 调试期：两章按钮全部常开 → 按 M 打开世界地图后点按钮即可传送。
+        // 调试期：两章按钮全部常开（打开世界地图只能走剧情节点：码头登船 / 章末登船）。
         // 置为 false 即恢复“云渡泽按剧情解锁”的原逻辑（见 updateWorldMapUnlocks）。
         this.debugUnlockAllWorldMapButtons = true;
 
@@ -84,6 +96,24 @@ class Main {
             yunduze: { x: 541, y: 1385 },
         };
         
+        // ========== 音频（背景音乐 / 音效；见 js/AudioManager.js）==========
+        // 背景音乐规则（需求）：
+        //   · 主图（青岚浮野 / 云渡泽）循环播放本图 BGM；进小游戏 / 进 Boss 关 / 传送到另一张地图立即停；
+        //   · 回到主图（小游戏退出 / Boss 关退出 / 从另一张地图传送回来）→ 等 10 秒再起播，
+        //     频繁传送则每次重新计时（AudioManager.scheduleBgm 内部重新计时）；
+        //   · 打开世界地图时不停（当前地图的 BGM 继续播）；
+        //   · 开始界面 BGM（bgm.main_menu）在 init 加载阶段就先试播一次（startMenuBgmEarly）：
+        //     被浏览器自动播放策略拦下时由 AudioManager 等第一次点击 / 按键补播
+        //     （加载界面上的那一次点击也算数，见加载提示 #soundHint）。
+        this.audioManager = null;                  // 音频管理器（initCoreSystems 里创建）
+        this.hasEnteredGameWorld = false;          // 是否进入过大地图（首次 = 从开始界面点开始 → 主图 BGM 立即播）
+        this.pendingBossVictorySound = false;      // Boss 已伏诛、等玩家走「归途法阵」回原位置时补播胜利音效
+
+        // ========== 小游戏（见 js/MiniGameManager.js / js/MiniGameScene.js）==========
+        // 刚从小游戏结算回主图的「E 键保护期」剩余秒数：见 MINI_GAME_EXIT_GUARD_SECONDS。
+        // 每帧在主 update 里递减，handleInteraction 会读它。
+        this._miniGameExitGuard = 0;
+
         // ========== 资源 ==========
         this.resourceManager = null;
         this.gameConfig = null;
@@ -120,7 +150,13 @@ class Main {
         // 初始化资源管理器和游戏配置
         this.resourceManager = ResourceManager.getInstance();
         this.gameConfig = GameConfig.getInstance();
-        
+
+        // 开始界面背景音乐：加载阶段就试播一次（越早越好，加载界面也能听到）
+        // 浏览器自动播放策略会拦下「玩家还没交互」的播放：AudioManager 会把这次尝试记下来，
+        // 等玩家的第一次点击 / 按键（包括在加载界面上发生的那一次）立刻补播
+        // —— 见 AudioManager.handleUserGesture 与 game.html 的 #soundHint 提示。
+        this.startMenuBgmEarly();
+
         // 预加载初始资源（不阻塞启动）
         // 用 try-catch 包裹，失败也不影响
         try {
@@ -264,7 +300,9 @@ class Main {
             const map = this.currentMap;
 
             // ====== 1) 自动发奖（第一章 + 第二章通用）======
-            // 修为 / 灵石 / 技能点 / 丹药 / 气血·灵息上限小增 / 境界 / 技能 / 解锁地图
+            // 支持字段：修为 / 灵石 / 技能点 / 丹药 / 气血·灵息上限小增 / 境界 / 技能 / 解锁地图。
+            // 注：本版平衡下第一章与第二章的任务都不再配置 rewards（空对象直接返回）——
+            //     角色成长改由境界基准（GameConfig.realms）与 Boss 战败成长（arenaDefeatBonus）提供。
             this.applyQuestRewards(questId, rewards);
 
             // ====== 移除已完成任务对应的任务道具 ======
@@ -358,6 +396,133 @@ class Main {
         });
         
         this.inputManager = new InputManager(window,this.canvas);
+
+        // 音频管理器（背景音乐循环 / 音效单次；缺失音频文件时静默跳过）
+        this.audioManager = AudioManager.getInstance();
+    }
+
+    // ==================== 音频调度（背景音乐 / 音效）====================
+
+    /**
+     * 当前主图应播的背景音乐键
+     * Boss 战场 / 未知地图没有主图 BGM → null
+     * @returns {string|null}
+     */
+    getCurrentMapBgmKey() {
+        if (!this.currentMap || !this.currentMap.mapId) return null;
+        return AudioManager.getMapBgmKey(this.currentMap.mapId);
+    }
+
+    /**
+     * 进入大地图场景（GameWorldScene.enter → 本方法）
+     * · 首次（从开始界面点「开始游戏」进来）：主图 BGM 立刻起播；
+     * · 之后（小游戏退出 / Boss 关退出 / 完结界面返回 / 从世界地图传送落地）：
+     *   立刻停掉其它音乐，等 10 秒再播当前主图的 BGM（频繁切换则重新计时）。
+     */
+    onGameWorldSceneEnter() {
+        const firstEntry = !this.hasEnteredGameWorld;
+        this.hasEnteredGameWorld = true;
+
+        if (firstEntry) {
+            this.playCurrentMapBgm();
+        } else {
+            this.scheduleMainMapBgm();
+        }
+    }
+
+    /**
+     * 离开大地图场景（GameWorldScene.exit → 本方法）
+     * 进小游戏 / 进战斗场景 / 进完结界面：主图 BGM 立即停（结束界面 / 小游戏会自行起播各自的 BGM）
+     */
+    onGameWorldSceneExit() {
+        this.stopMainMapBgm();
+    }
+
+    /**
+     * 立即起播当前主图的背景音乐（没有对应 BGM 的图则不停不播）
+     * @returns {boolean}
+     */
+    playCurrentMapBgm() {
+        if (!this.audioManager) return false;
+        const key = this.getCurrentMapBgmKey();
+        return key ? this.audioManager.playBgm(key) : false;
+    }
+
+    /**
+     * 回主图：立刻停掉当前音乐，登记「10 秒后再播本图 BGM」
+     * @param {number} [delay] - 等待秒数（缺省 10 秒；测试可传小值）
+     * @returns {boolean}
+     */
+    scheduleMainMapBgm(delay) {
+        if (!this.audioManager) return false;
+        // 重复调度 = 重新计时（需求：频繁传送时 10 秒倒计时每次重新开始）
+        this.audioManager.stopBgm(this._mainMapBgmKeys());
+        const key = this.getCurrentMapBgmKey();
+        if (!key) return false;
+        const seconds = (typeof delay === 'number') ? delay : AudioManager.MAP_BGM_RETURN_DELAY;
+        return this.audioManager.scheduleBgm(key, seconds);
+    }
+
+    /**
+     * 停掉主图背景音乐（正在播的 + 10 秒倒计时中的），不动小游戏 / 完结界面 / 开始界面的 BGM
+     * @returns {boolean}
+     */
+    stopMainMapBgm() {
+        if (!this.audioManager) return false;
+        return this.audioManager.stopBgm(this._mainMapBgmKeys());
+    }
+
+    /** 全部主图 BGM 键（AudioManager.MAP_BGM 的值列表） */
+    _mainMapBgmKeys() {
+        return Object.keys(AudioManager.MAP_BGM).map(mapId => AudioManager.MAP_BGM[mapId]);
+    }
+
+    /**
+     * 提早尝试起播开始界面背景音乐（bgm.main_menu）—— Main.init 加载阶段调用
+     * · 正常情况（玩家此前已与页面交互过）：加载界面就开始循环播放；
+     * · 被浏览器自动播放策略拦下：AudioManager 记下这次尝试，玩家的第一次点击 / 按键
+     *   （**包括在加载界面上发生的那一次**）会立刻补播 —— 不必在开始界面再点一次；
+     * · 正式开始界面（MainMenuScene.enter）还会再调一次 playBgm：同一首已在播时不会重头播。
+     * @returns {boolean} 是否成功发起播放（被拦下时返回 true，由 AudioManager 负责补播）
+     */
+    startMenuBgmEarly() {
+        return gameAudio.playBgm('bgm.main_menu');
+    }
+
+    /**
+     * 地图切换（Main.switchToMap 调用）后的背景音乐处理：
+     * · 落到 Boss 战场 → 主图 BGM 立即停（战场没有背景音乐）；
+     * · 落到主图（另一张图 / 从战场返回）→ 10 秒后再播该图 BGM。
+     * @param {string} fromMapId - 切换前的地图 ID
+     * @param {string} toMapId - 切换后的地图 ID
+     */
+    onMapSwitched(fromMapId, toMapId) {
+        if (!this.audioManager) return;
+
+        // 只是同一张地图内的重新落点（例如同图传送）→ 不动音乐
+        if (fromMapId && toMapId && fromMapId === toMapId) return;
+
+        if (this.isArenaMap(toMapId)) {
+            // 进 Boss 关：立即停止主图背景音乐（战场本身没有 BGM）
+            this.stopMainMapBgm();
+            return;
+        }
+
+        if (AudioManager.getMapBgmKey(toMapId)) {
+            this.scheduleMainMapBgm();
+        } else {
+            // 未知地图（没有配 BGM）→ 别留上一张图的音乐
+            this.stopMainMapBgm();
+        }
+    }
+
+    /**
+     * 播放一次音效（缺失音频文件时静默跳过）
+     * @param {string} key - 音频键，如 'sfx.victory'
+     * @returns {boolean}
+     */
+    playSfx(key) {
+        return this.audioManager ? this.audioManager.playSfx(key) : false;
     }
 
     /**
@@ -376,8 +541,8 @@ class Main {
             areaButtons: [
                 {
                     id: 'btn_qinglan',
-                    x: 250,           // 按钮中心x坐标（青岚浮野：左下「练气」区域）
-                    y: 350,           // 按钮中心y坐标
+                    x: 450,           // 按钮中心x坐标（青岚浮野：左下「练气」区域）
+                    y: 550,           // 按钮中心y坐标
                     width: 140,        // 按钮宽度
                     height: 100,       // 按钮高度
                     image: this.resourceManager.getCachedImage('worldMap.button_qinglan'),
@@ -392,8 +557,8 @@ class Main {
                 },
                 {
                     id: 'btn_yunduze',
-                    x: 500,
-                    y: 100,
+                    x: 1000,
+                    y: 400,
                     width: 140,
                     height: 100,
                     image: this.resourceManager.getCachedImage('worldMap.button_yunduze'),
@@ -634,7 +799,13 @@ class Main {
         }
 
         // ===== 规则0：小游戏中时，所有外部按键一律忽略 =====
-        if (currentScene && currentScene.sceneId === 'miniGame' && this.miniGameManager && this.miniGameManager.isPlaying) {
+        // 注意：这里判的是「当前场景是不是小游戏」，**不能只看 isPlaying** ——
+        // 结算完成（isPlaying=false）到场景真正切回主图之间还有 1 帧，本地图与浏览器连发的
+        // keydown（玩家长按 E 采药）正好可能落在这一帧：那时若放行，E 会走到下面的
+        // handleInteraction → 采药点路标 → 又开一局小游戏，而且 Main.startMiniGame 里的
+        // switchScene('miniGame') 会把待切换的 gameWorld 覆盖掉 → 玩家被留在小游戏里，
+        // 起风 BGM 过一会儿又响、风停时虚空坠落再判一次失败音效。
+        if (currentScene && currentScene.sceneId === 'miniGame') {
             return;
         }
 
@@ -660,6 +831,21 @@ class Main {
             return;
         }
         
+        // ===== 规则2b：输入被「完全封锁」→ 键盘一律无响应（F2 调试叠层除外，见规则-0） =====
+        // 设置方：渡厄使「控制」禁键（Main.startArenaControlLock，需求是「禁止一切按键输入」）、
+        // 筑基 / 结丹调息、完结字幕。上面「调息 / 剧情对白 / 小游戏 / 任务栏 / 对话框」这些
+        // 需要例外放行的状态已经各自 return 过（对白推进不会被锁死），走到这里的是「战场上
+        // 被锁住」这类纯粹不让操作的帧。
+        //   · 旧写法这里没有任何拦截：被锁住时按 Q 仍会走 case 'q' → questUI.toggle()，
+        //     任务栏真的开了、还播了 sfx.ui_quest_panel —— 而该状态下按需求「禁止一切按键输入」，
+        //     玩家长按 Q 只听到音效、行为与预期对不上（音效判定与行为判定不是同一条）。
+        //   · 统一 return 后 Q / E / ESC 与 J/U/I/L/O（技能另在 PlayerCombatSystem._canCaptureInput
+        //     拦截）一起失效，音效不再离开行为单独出现。
+        if (this.inputManager && typeof this.inputManager.isInputBlocked === 'function'
+            && this.inputManager.isInputBlocked()) {
+            return;
+        }
+
         switch (key) {
             case 'escape':
                 // 关闭弹窗
@@ -672,21 +858,11 @@ class Main {
                     this.questUI.toggle();
                 }
                 break;
-            case 'm':
-                // 世界地图（调试期恢复）：M 打开/关闭九州总图，图上点按钮即传送
-                // - 只在游戏世界场景生效；小游戏 / 对话 / 调息序列中不响应（见上方各条规则）
-                // - 战场内不响应：世界地图打开时 Main.updateGameWorld 会提前返回，
-                //   战场的胜负 / 死亡处理都停摆，而 Boss 仍会继续攻击，故先退出战斗再开图
-                // - 打开时：Main.updateGameWorld 只更新地图本身并封锁移动，
-                //   Main.renderGameWorld 只画世界地图（画在 GameLoop 的实体之后，完全遮住原画面）
-                if (currentScene && currentScene.sceneId === 'gameWorld') {
-                    if (!this.mapTeleport.isVisible && this.isArenaMap()) {
-                        this.addGameNotification('战斗中无法打开世界地图');
-                    } else {
-                        this.mapTeleport.toggle();
-                    }
-                }
-                break;
+            // 注：M 键「打开 / 关闭世界地图（九州总图）」入口已按需求移除（第十三次改动，2026-09-13）——
+            // 世界地图只在剧情节点开启：第一章码头登船（Main.boardShipAndOpenWorldMap）、
+            // 章末登船（Main.openWorldMapFromBerth）；键盘上不再有开关，
+            // 关闭仍走 ESC（见 handleEscapeKey → mapTeleport.hide）。
+            // 这里整段删除而不是留一个空 case：空 case 容易被后续维护当成「还留着调试入口」。
             case 'e':
                 // 交互键
                 this.handleInteraction();
@@ -739,6 +915,11 @@ class Main {
 
         // 世界地图打开时：画面与操作都只保留世界地图本身（避免地图上的 E 键盘误触发交互）
         if (this.mapTeleport && this.mapTeleport.isVisible) return;
+
+        // 小游戏进行中 / 仍在小游戏场景 / 刚结算回来的保护期内：不接受任何世界交互。
+        // handleKeyDown 是事件驱动的（不走场景 update），所以这里必须再兜一层，
+        // 否则冒出来的 E 会经路标把刚结束的小游戏又开一局（见 MINI_GAME_EXIT_GUARD_SECONDS）。
+        if (this.isMiniGameActive() || this._miniGameExitGuard > 0) return;
         
         // 如果玩家在战斗中，不处理交互
         if (this.player.isInBattle) return;
@@ -801,6 +982,8 @@ class Main {
         
         if (success) {
             console.log(`[Main] 拾取物品: ${pickupItem.name}`);
+            // 拾取音效（任务道具；乘风采药采到草药也走同一个音效）
+            this.playSfx('sfx.pickup');
             // 从地图中移除已拾取的物品
             if (this.currentMap && this.currentMap.removePickupItem) {
                 this.currentMap.removePickupItem(pickupItem.id);
@@ -914,6 +1097,9 @@ class Main {
     async switchToMap(mapId, worldPosition) {
         if (!this.player) return null;
 
+        // 背景音乐：先记下切换前的地图（用于 onMapSwitched 判断是否需要重新计时）
+        const previousMapId = (this.currentMap && this.currentMap.mapId) || null;
+
         const targetMap = await this.mapManager.switchMap(mapId, this.player);
         if (!targetMap) {
             console.warn(`[地图] 目标地图不存在或加载失败: ${mapId}`);
@@ -952,6 +1138,9 @@ class Main {
         // 第二章舞台状态（开局旁白 / 江晚陈栎的出现时机 / NPC 站位 / 世界地图解锁）
         this.applyChapter2Stage(targetMap);
 
+        // 背景音乐：进 Boss 战场立即停主图 BGM；落到主图 = 10 秒后再起播（见 onMapSwitched）
+        this.onMapSwitched(previousMapId, targetMap.mapId);
+
         return targetMap;
     }
 
@@ -969,6 +1158,14 @@ class Main {
         // 战场入口（主线四）：走 Boss 战场流程（记录返回点，便于死亡/胜利后回到法阵旁）
         if (teleportArray.bossArena) {
             return this.enterBossArena(teleportArray);
+        }
+
+        // 战场「归途法阵」（id = teleport_boss_exit，见 GameMap.createArenaExitArray）：
+        // 打赢 Boss 后玩家就是从这里回到原来位置 —— 这一刻才播胜利音效
+        // （需求：只有打败 Boss 且通过传送门回到原位置才播；再次进场不会再生成 Boss，故不会误播）
+        if (this.pendingBossVictorySound && this.isBossArenaExitArray(teleportArray)) {
+            this.pendingBossVictorySound = false;
+            this.playSfx('sfx.victory');
         }
 
         this.player.isInteracting = true;
@@ -995,6 +1192,10 @@ class Main {
     async enterBossArena(teleportArray) {
         if (!this.player || !teleportArray) return;
 
+        // 进场即清掉上一次「打赢 Boss 的胜利音效」待播标记：
+        // 只有这一次真的打赢 Boss 并从归途法阵回原位置时才补播（见 triggerTeleport）
+        this.pendingBossVictorySound = false;
+
         const arenaMapId = teleportArray.targetMapId || this.bossArenaMapId;
         const dropPoint = this.getBossArenaReturnPoint(teleportArray);
         this.bossArenaReturn = dropPoint;
@@ -1006,6 +1207,8 @@ class Main {
             },
             resourceGroup: teleportArray.arenaResourceGroup || 'bossArena',
             returnMapId: teleportArray.arenaReturnMapId || 'qinglan_fuye',
+            // 战败成长参数（来自战场传送法阵配置）：每次战败提升的上限与次数上限
+            defeatBonus: teleportArray.arenaDefeatBonus || null,
             returnPoint: dropPoint,
         };
 
@@ -1224,14 +1427,75 @@ class Main {
     }
 
     /**
+     * Boss 战败成长：每个战场每次战败都会提升气血 / 灵息上限
+     * - 参数来源：战场传送法阵配置 arenaDefeatBonus { id, maxHealth, maxMana, maxFailures }
+     *     第一章摄风山魈：气血上限 +20 / 灵息上限 +10，最多结算 5 次
+     *     第二章渡厄使  ：气血上限 +35 / 灵息上限 +20，最多结算 5 次
+     * - 战败次数（PlayerData.bossFailures）与累计加成（maxHealthBonus / maxManaBonus）随存档保存；
+     *   境界切换时由 Main.applyPermanentStatBonus 把累计加成叠加在境界基准值之上；
+     * - 达到 maxFailures 后不再提升（只写 console 日志，不再发通知）。
+     * @param {Object} [arena] - 战场参数（缺省用 this.activeArena）
+     * @returns {boolean} 本次是否实际提升了上限
+     */
+    applyBossFailureBonus(arena) {
+        const info = arena || this.activeArena;
+        if (!this.player || !this.player.playerData || !info) return false;
+
+        const bonus = info.defeatBonus;
+        if (!bonus) return false;
+
+        const bonusHealth = bonus.maxHealth || 0;
+        const bonusMana = bonus.maxMana || 0;
+        if (bonusHealth <= 0 && bonusMana <= 0) return false;
+
+        const maxFailures = bonus.maxFailures > 0 ? bonus.maxFailures : 5;
+        const key = bonus.id || info.defeatFlag || info.mapId || 'boss';
+
+        const data = this.player.playerData;
+        if (!data.bossFailures) data.bossFailures = {};
+
+        const times = data.bossFailures[key] || 0;
+        if (times >= maxFailures) {
+            console.log(`[Boss战场] ${key} 战败成长已达上限（${maxFailures} 次），本次不再提升上限`);
+            return false;
+        }
+
+        data.bossFailures[key] = times + 1;
+        data.maxHealthBonus = (data.maxHealthBonus || 0) + bonusHealth;
+        data.maxManaBonus = (data.maxManaBonus || 0) + bonusMana;
+        data.maxHealth += bonusHealth;
+        data.maxMana += bonusMana;
+        data.health = Math.min(data.maxHealth, data.health + bonusHealth);
+        data.mana = Math.min(data.maxMana, data.mana + bonusMana);
+
+        console.log(`[Boss战场] 第 ${times + 1}/${maxFailures} 次战败：气血上限 +${bonusHealth}、灵息上限 +${bonusMana}`);
+        this.addGameNotification(`屡败屡进：气血上限 +${bonusHealth}，灵息上限 +${bonusMana}（${times + 1}/${maxFailures}）`);
+        return true;
+    }
+
+    /**
      * 战败后回到法阵旁
      * - 复活并落回法阵旁，不发放战利品
+     * - 战败成长：先按战场配置提升上限（见 applyBossFailureBonus），再由 revive 按新上限回满
+     * - 战败清场：清掉自身的技能效果（闪避加速 / 护身术减伤）与全部技能冷却
+     *   （PlayerCombatSystem.resetOnDeath，第十三次改动）
      * - 胜利不再走这里：Boss 伏诛后由 handleBossArenaVictory 在战场正中心开启永久归途法阵，
      *   玩家自行按 E 返回原来位置（回归后的 switchToMap 会依任务目标补生成战利品）
      * @returns {Promise<boolean>} 是否成功返回
      */
     async returnFromBossArena() {
         if (!this.player || this.isReturningFromBossArena) return false;
+
+        // 被 Boss 打败（战场内阵亡）→ 播一次失败音效；同时清掉可能残留的胜利待播标记
+        this.pendingBossVictorySound = false;
+        this.playSfx('sfx.defeat');
+
+        // 战败清场（第十三次改动，2026-09-13）：清掉自身的技能效果（闪避的加速、护身术的减伤）
+        // 并把所有技能冷却清 0 —— 复活后是干净的上场状态，不会带着上一轮的增益 / 冷却重打。
+        // 见 PlayerCombatSystem.resetOnDeath（顺带清受伤僵直与施法残留）。
+        if (this.playerCombat && typeof this.playerCombat.resetOnDeath === 'function') {
+            this.playerCombat.resetOnDeath();
+        }
 
         // 离开战场：兜底解除「控制」禁键（正常情况计时已到）
         this.releaseArenaControlLock();
@@ -1246,6 +1510,9 @@ class Main {
 
             // 清理战场：删除战场 Boss 并释放其资源（再次进场会重新生成，直到它被击败）
             this.clearBossArenaResources();
+
+            // 战败成长：先提升上限（前 5 次），再由 revive 按新上限回满
+            this.applyBossFailureBonus();
 
             // 落回法阵旁后复活（气血/灵力恢复，短暂无敌）
             if (!this.player.isAlive && this.player.revive) {
@@ -1323,6 +1590,15 @@ class Main {
      * @param {GameMap} [arenaMap] - 战场地图实例（缺省时从 MapManager 取）
      * @returns {TeleportArray|null}
      */
+    /**
+     * 该传送法阵是否是战场「归途法阵」（打赢 Boss 后回原位置的出口）
+     * @param {TeleportArray} teleportArray
+     * @returns {boolean}
+     */
+    isBossArenaExitArray(teleportArray) {
+        return !!(teleportArray && teleportArray.id === 'teleport_boss_exit');
+    }
+
     ensureBossArenaExitArray(arenaMap) {
         const arenaMapId = (this.activeArena && this.activeArena.mapId) || this.bossArenaMapId;
         const map = arenaMap || (this.mapManager && this.mapManager.getMap
@@ -1365,6 +1641,11 @@ class Main {
         if (!map || map.mapId !== arena.mapId) return;
 
         this.bossArenaVictoryHandled = true;
+
+        // 胜利音效不在这里播：需求是「打赢 Boss 并通过传送门回到原来位置」才播，
+        // 所以这里只挂起标记，等玩家走归途法阵回原位置时由 triggerTeleport 补播
+        // （打赢后再进战场不会再生成 Boss，因此后续进场不会误播）
+        this.pendingBossVictorySound = true;
 
         // 1) 剧情标记（读档 / 再次进场时据此不再生成 Boss）
         this.setStoryFlag(arena.defeatFlag);
@@ -2082,7 +2363,7 @@ class Main {
      * 筑基结算（对话 on_complete: complete_foundation_trial）
      * - 记录剧情标记 → 境界提升（练气圆满 → 筑基）→ 推进 chapter1_ending_1 的 complete_foundation_trial 目标
      *   （目标完成 → onQuestComplete 把阿禾迁到码头送别位）
-     * - 数值按筑基境界写满：气血上限 200 / 灵息上限 100，两项当前值同时回满（见 applyFoundationRealmStats）
+     * - 数值按筑基境界写满：气血上限 400 / 灵息上限 250（另加累积的 Boss 战败成长），两项当前值同时回满（见 applyFoundationRealmStats）
      */
     completeFoundationTrial() {
         this.setStoryFlag('foundation_trial_done');
@@ -2097,7 +2378,7 @@ class Main {
         }
 
         // 数值兜底：不论上面是否走到境界提升，筑基调息结束都必须拿到筑基数值
-        // （气血上限 200 / 灵息上限 100 并回满），避免练气未到圆满时数值不生效。
+        // （气血上限 400 / 灵息上限 250 并回满），避免练气未到圆满时数值不生效。
         this.applyFoundationRealmStats();
 
         if (this.player && this.player.questSystem) {
@@ -2107,7 +2388,8 @@ class Main {
 
     /**
      * 筑基数值：按 GameConfig 的 ZHUJI 境界配置写满玩家数据
-     * - 境界 / 小阶段 → 筑基·初期；气血上限 200、灵息上限 100（唯一数据源：GameConfig.realms.ZHUJI）；
+     * - 境界 / 小阶段 → 筑基·初期；气血上限 400、灵息上限 250（唯一基准数据源：GameConfig.realms.ZHUJI，
+     *   其上再叠加累积的 Boss 战败成长 maxHealthBonus / maxManaBonus）；
      * - 当前气血 / 灵息一并回满（调息成功即巅峰状态）；
      * - 重复调用幂等（数值相同，不会叠加）。
      * @returns {boolean} 是否成功写入（缺少玩家或境界配置时返回 false）
@@ -2133,6 +2415,9 @@ class Main {
         if (typeof this.player.getCurrentMoveSpeed === 'function') {
             this.player.moveSpeed = this.player.getCurrentMoveSpeed();
         }
+
+        // Boss 战败成长的累计加成叠加在筑基基准值之上（没有战败成长时数值不变）
+        this.applyPermanentStatBonus(data);
 
         console.log(`[Main] 筑基数值已生效：气血 ${data.health}/${data.maxHealth}，灵息 ${data.mana}/${data.maxMana}`);
         return true;
@@ -2184,6 +2469,33 @@ class Main {
             return Chapter2Config.isChapter2Map(id);
         }
         return id === 'yunduze' || id === 'boss_arena_ch2';
+    }
+
+    /**
+     * 是否为第一章的舞台地图（青岚浮野）
+     * 判据：地图配置里的 chapter === 1，且不是战场地图
+     * （boss_arena_ch1 的舞台由战场流程自己恢复，不归章节舞台管）。
+     *
+     * 参数可传 mapId（string）或地图实例（GameMap / 测试桩对象）：
+     * Main.applyChapterEndStage 要在“刚切好图”的时机判断章节，此时优先读地图自己的
+     * mapConfig.chapter，避免 mapId 还没登记时判错章节。
+     *
+     * @param {string|Object} [map] - 缺省取当前地图
+     * @returns {boolean}
+     */
+    isChapter1Map(map) {
+        const target = map || this.currentMap;
+        if (!target) return false;
+
+        const mapId = typeof target === 'string' ? target : (target.mapId || null);
+        if (this.isArenaMap(mapId)) return false;
+
+        const ownConfig = typeof target === 'string' ? null : (target.mapConfig || null);
+        const config = ownConfig
+            || ((mapId && this.gameConfig && typeof this.gameConfig.getMap === 'function')
+                ? this.gameConfig.getMap(mapId)
+                : null);
+        return !!config && config.chapter === 1;
     }
 
     /**
@@ -2453,7 +2765,34 @@ class Main {
     }
 
     /**
+     * 把累积的 Boss 战败成长叠加到气血 / 灵息上限之上（境界数值写入之后调用）
+     * - 数值来源：PlayerData.maxHealthBonus / maxManaBonus（每次 Boss 战败累加，
+     *   见 Main.applyBossFailureBonus）；
+     * - 两个加成都是 0 时不做任何改动（旧存档 / 没战败过的角色数值不变）；
+     * - 叠加后按新上限回满（境界切换 / 调息结算本身即巅峰状态）。
+     * @param {Object} [data] - 玩家数据（缺省用 this.player.playerData）
+     * @returns {boolean} 是否叠加了加成
+     */
+    applyPermanentStatBonus(data) {
+        const target = data || (this.player && this.player.playerData);
+        if (!target) return false;
+
+        const bonusHealth = target.maxHealthBonus || 0;
+        const bonusMana = target.maxManaBonus || 0;
+        if (bonusHealth === 0 && bonusMana === 0) return false;
+
+        target.maxHealth += bonusHealth;
+        target.maxMana += bonusMana;
+        target.health = target.maxHealth;
+        target.mana = target.maxMana;
+
+        console.log(`[Main] Boss 战败成长已叠加：气血上限 ${target.maxHealth}（含 +${bonusHealth}）、灵息上限 ${target.maxMana}（含 +${bonusMana}）`);
+        return true;
+    }
+
+    /**
      * 按 GameConfig 的境界配置写满玩家数值（气血 / 灵息上限并回满）
+     * 写入后叠加累积的 Boss 战败成长（见 applyPermanentStatBonus）并按上限回满
      * @param {string} realmId - 'lianqi' | 'zhuji' | 'jiedan' | ...
      * @returns {boolean}
      */
@@ -2477,6 +2816,9 @@ class Main {
         if (typeof this.player.getCurrentMoveSpeed === 'function') {
             this.player.moveSpeed = this.player.getCurrentMoveSpeed();
         }
+
+        // Boss 战败成长的累计加成叠加在境界基准值之上（没有战败成长时数值不变）
+        this.applyPermanentStatBonus(data);
 
         console.log(`[Main] 境界数值已生效：${realmConfig.name}，气血 ${data.health}/${data.maxHealth}，灵息 ${data.mana}/${data.maxMana}`);
         return true;
@@ -2792,9 +3134,14 @@ class Main {
                 }
                 console.log(`[路标] ${signpost.name} 完成！`);
 
-                if (gameId === 'herb_collect' && this.player && this.player.questSystem) {
+                if (gameId === 'herb_collect') {
                     // 第一章：乘风采药成功 → 推进主线二「一盏安身灯」采药目标
-                    this.player.questSystem.updateQuestProgress('chapter1_main_2', 'collect_item', 'lingcao', 3);
+                    if (this.player && this.player.questSystem) {
+                        this.player.questSystem.updateQuestProgress('chapter1_main_2', 'collect_item', 'lingcao', 3);
+                    }
+                    // 需求：成功退出小游戏后补一句收尾对白（文本见路标 successDialogue，缺省用内置台词）
+                    this.playHerbCollectSuccessDialogue(signpost);
+                    return;
                 }
             });
         };
@@ -2804,6 +3151,23 @@ class Main {
         } else {
             launch();
         }
+    }
+
+    /**
+     * 乘风采药「成功退出」后的收尾对白（主角自言自语）
+     *
+     * 需求：小游戏成功 → 退出后加个对话（说明采药成功）。
+     * 文本优先取路标配置（Chapter1Config 采药点路标的 successDialogue / successSpeaker，
+     * 见 Signpost.js），没配就用 Main 顶部的内置台词 —— 保证成功之后一定有句话。
+     * 走的是和其余剧情对白同一条链路（playDialogueText：锁移动 / 按 J 或点击推进），
+     * 所以玩家刚回到主图时不会误操作。
+     * @param {Signpost} [signpost] - 触发本局小游戏的路标（可空）
+     * @returns {boolean} 是否播出了对白
+     */
+    playHerbCollectSuccessDialogue(signpost) {
+        const text = (signpost && signpost.successDialogue) || HERB_COLLECT_SUCCESS_DIALOGUE;
+        const speaker = (signpost && signpost.successSpeaker) || HERB_COLLECT_SUCCESS_SPEAKER;
+        return this.playDialogueText(text, speaker);
     }
 
     /**
@@ -3006,7 +3370,8 @@ class Main {
 
     /**
      * 结丹结算：推进《灯定丹成》的唯一目标（结丹调息）
-     * 境界与气血 / 灵息上限的实际写入由 completeQuest → applyQuestRewards（realm）完成，
+     * 境界与气血 / 灵息上限的实际写入由这里的 applyRealmStats('jiedan') 完成
+     * （本任务不再配置奖励，境界推进不依赖 rewards.realm），
      * 这里先按配置写满结丹数值，保证即使玩家修为未到圆满也能正常进入结丹。
      * 注：剑影连斩已在第二章主线一《渡口无归客》的剑修基础连招试炼中传授，此处不再重复发放。
      */
@@ -3031,7 +3396,7 @@ class Main {
     // ==================== 第二章章末：中央泊位登船 ====================
 
     /**
-     * 确保「前往照尘仙城」的登船路标存在（主线《行舟有归处》进行中且已与阿禾交接后可见）
+     * 确保章末「登船」路标存在（主线《行舟有归处》进行中且已与阿禾交接后可见）
      * 数据源：Chapter2Config → maps.yunduze.chapterEnd.departSignpost（世界坐标 587,1327）
      * @returns {Signpost|null}
      */
@@ -3048,10 +3413,10 @@ class Main {
 
         const signpost = new Signpost({
             id: id,
-            name: config.name || '前往照尘仙城',
+            name: config.name || '登船',
             position: config.position || { x: 587, y: 1327 },
             radius: config.radius || 56,
-            promptText: config.promptText || '乘船前往照尘仙城',
+            promptText: config.promptText || '登船前往照尘仙城',
             image: config.image || null,
             imageWidth: config.imageWidth || null,
             imageHeight: config.imageHeight || null,
@@ -3171,17 +3536,26 @@ class Main {
     }
 
     /**
-     * 生成“登船”路标（永久）
+     * 生成“登船”路标（第一章 · 永久）
      * 数据源：Chapter1Config → maps.qinglan_fuye.chapterEnd.departSignpost（世界坐标 2566,1419）
      * 已存在同名路标时不重复生成；按 E → boardShipAndOpenWorldMap()
      * 美术：image / imageWidth / imageHeight 原样透传给 Signpost
      *      （当前为 'signposts.depart_boat' → assets/images/signposts/depart_boat.png，缺图回退程序化木牌）
+     *
+     * ⚠ 仅限第一章舞台图：本方法生成的是**第一章**的登船路标（第一章的回调 + 无任务门控），
+     *   在第二章云渡泽调用会用该图 chapterEnd.departSignpost 冒出一个无门控的「登船」路标，
+     *   因此这里加了章节防呆判断。第二章泊位路标见 Main.ensureChapter2BoatSignpost。
+     *
      * @param {GameMap} gameMap - 地图实例
      * @returns {Signpost|null}
      */
     createDepartSignpost(gameMap) {
         const map = gameMap || this.currentMap;
         if (!map || !map.signposts || typeof Signpost !== 'function') return null;
+        if (!this.isChapter1Map(map)) {
+            console.warn(`[Main] 忽略非第一章地图的登船路标生成请求: ${map.mapId || '(未登记 mapId)'}`);
+            return null;
+        }
 
         const chapterEnd = (map.mapConfig && map.mapConfig.chapterEnd) || {};
         const config = chapterEnd.departSignpost || {};
@@ -3233,11 +3607,24 @@ class Main {
      * 按剧情标记恢复章末的舞台状态（重新进图 / 读档后保持一致）
      * - chapter1_ending_1 完成 → 阿禾迁到码头告别位
      * - chapter1_farewell_done 已记录 → 补生成永久登船路标
+     *
+     * ⚠ 只作用于**第一章舞台图（青岚浮野）**：这里恢复的是第一章章末 ——
+     *   阿禾站位取自第一章的 chapterEnd.aheQuayTile（81,44），路标也要用第一章的
+     *   chapterEnd.departSignpost（2566,1419）与 boardShipAndOpenWorldMap 回调。
+     *   本方法由 switchToMap / loadInitialMap 对**每一张地图**调用，
+     *   对其它章节地图直接执行会产生两个真机 bug（加这道判断就是为了修它们）：
+     *     ① 阿禾被挪到第一章码头瓦片 —— 刚进云渡泽她还站在第一章的位置；
+     *     ② 用该图的 chapterEnd.departSignpost 生成一个**无任务门控**的第一章登船路标 ——
+     *        进入云渡泽就冒出「登船前往照尘仙城」，且按 E 走的是第一章的登船逻辑。
+     *   第二章泊位的「登船」路标一律由 Main.ensureChapter2BoatSignpost 在
+     *   《行舟有归处》任务门控下生成。
+     *
      * @param {GameMap} gameMap - 地图实例
      */
     applyChapterEndStage(gameMap) {
         const map = gameMap || this.currentMap;
         if (!map || !this.player || !this.player.questSystem) return;
+        if (!this.isChapter1Map(map)) return;
         const qs = this.player.questSystem;
 
         if (typeof qs.isQuestCompleted === 'function' && qs.isQuestCompleted('chapter1_ending_1')) {
@@ -3539,6 +3926,10 @@ class Main {
                 'ui.skill_hutishu',
                 'ui.skill_dodge',
                 'ui.skill_jianying',
+                // 飘落物（落叶 / 落花）：1 行 12 帧、单帧 16×16（整图 192×16），
+                // 前两章主图 / 开始界面 / 游戏完结界面共用（见 js/FallingFoliage.js）
+                'foliage.falling_leaf',
+                'foliage.falling_flower',
                 // 路标图标（采药点 / 章末长桥码头登船点；缺图时路标回退程序化木牌）
                 'signposts.herb_collect',
                 'signposts.depart_boat',
@@ -3589,14 +3980,44 @@ class Main {
                 'miniGame.xingzhou_collision',
             ],
             audio: [
-                'bgm.main_menu',
-                'bgm.qinglan',
+                // ===== 背景音乐（循环播放；见 js/AudioManager.js）=====
+                'bgm.main_menu',       // 开始游戏界面（加载完即播 / 点开始即停）
+                'bgm.qinglan',         // 第一章主图 青岚浮野（回主图 10 秒后起播）
+                'bgm.yunduze',         // 第二章主图 云渡泽（同上）
+                'bgm.minigame_boat',   // 逆流送灯（开局即播 / 结束即停）
+                'bgm.minigame_herb',   // 乘风采药（只在起风期间循环）
+                'bgm.ending',          // 游戏结束滚动字幕（退出界面才停）
+                // ===== 玩家音效（技能 / 攻击真的发动才播）=====
+                'sfx.player_attack',
+                'sfx.player_lingxidan',
+                'sfx.player_hutishu',
+                'sfx.player_dodge',
+                'sfx.player_jianying',
+                'sfx.player_hurt',     // 受伤（正在播时不重播）
+                'sfx.pickup',          // 拾取任务道具 / 采药
+                // ===== 摄风山魈（第一章 Boss）=====
+                'sfx.boss_shanxiao_charge',
+                'sfx.boss_shanxiao_sweep',
+                'sfx.boss_shanxiao_pounce',
+                'sfx.boss_shanxiao_slam',
+                'sfx.boss_shanxiao_hurt',
+                'sfx.boss_shanxiao_defeat',
+                // ===== 渡厄使（第二章 Boss）=====
+                'sfx.boss_due_summon',
+                'sfx.boss_due_dash',
+                'sfx.boss_due_control',
+                'sfx.boss_due_hurt',
+                'sfx.boss_due_defeat',
+                // ===== UI =====
+                'sfx.ui_hover',
                 'sfx.ui_click',
-                'sfx.battle_attack',
-                'sfx.battle_hit',
-                'sfx.battle_skill',
-                'sfx.battle_hurt',
-                'sfx.battle_dead',
+                'sfx.ui_quest_panel',
+                // ===== 小游戏（认灯归魂）=====
+                'sfx.minigame_lantern_light',
+                'sfx.minigame_lantern_extinguish',
+                // ===== 胜负 =====
+                'sfx.victory',
+                'sfx.defeat',
             ],
         };
         
@@ -3742,7 +4163,7 @@ class Main {
             signpost.updateQuestGate(this.player.questSystem);
         }
 
-        // 第二章：章末「前往照尘仙城」的登船路标由代码动态生成
+        // 第二章：章末「登船」路标由代码动态生成
         // （与第一章 createDepartSignpost 同一思路：路标要挂在回调上，不能只靠地图配置）
         const boatQuest = this.player.questSystem.getQuestState
             ? this.player.questSystem.getQuestState('chapter2_ending_2')
@@ -3881,7 +4302,10 @@ class Main {
                 break;
                 
             case 'miniGame':
-                this.updateMiniGame(deltaTime, input);
+                // 小游戏只由 MiniGameScene.update（SceneManager 每帧调一次）驱动。
+                // 这里不再重复驱动（第十三次改动）：旧写法 MiniGameScene.update 与
+                // Main.updateMiniGame 各更新一次 → 同一帧 dt 翻倍（乘风采药固定 3 秒的风
+                // 会变成「实际 1.5 秒」）、同一份 pressedKeys 也会被读两遍。
                 break;
 
             case 'ending':
@@ -3890,6 +4314,16 @@ class Main {
                 break;
         }
         
+        // 更新音频：推进「回主图 10 秒后再播背景音乐」的倒计时（见 AudioManager.scheduleBgm）
+        if (this.audioManager) {
+            this.audioManager.update(deltaTime);
+        }
+
+        // 小游戏结算回主图的「E 键保护期」倒计时（见 MINI_GAME_EXIT_GUARD_SECONDS）
+        if (this._miniGameExitGuard > 0) {
+            this._miniGameExitGuard = Math.max(0, this._miniGameExitGuard - deltaTime);
+        }
+
         // 更新存档管理器（自动保存）
         if (this.saveManager) {
             this.saveManager.update(deltaTime);
@@ -3958,7 +4392,8 @@ class Main {
         if (this.dialogBox.isVisible) {
             this.dialogBox.update(deltaTime);
             
-            // 更新对话选项按钮
+            // 更新对话选项按钮（唯一更新点：喂本帧真实鼠标坐标；
+            // DialogBox.update 已不再用 (0,0) 空鼠标刷它们，否则悬停音效会每帧重播）
             this.dialogBox.buttons.forEach(button => {
                 button.update(
                     input.mouseX,
@@ -4001,8 +4436,11 @@ class Main {
 
         // 任务栏打开 → 忽略所有游戏操作
         if (!this.questUI.isVisible && !this.dialogBox.isVisible) {
-            // 检查交互键
-            if (input.pressedKeys['e'] && !this.mapTeleport.isVisible) {
+            // 检查交互键（输入被完全封锁时交互同样无响应 —— 如渡厄使「控制」禁键，
+            // 旧写法只看「任务栏 / 对话框」，被锁住时按 E 还能开对话 / 进战场）
+            if (input.pressedKeys['e'] && !this.mapTeleport.isVisible
+                && !(this.inputManager && typeof this.inputManager.isInputBlocked === 'function'
+                    && this.inputManager.isInputBlocked())) {
                 this.handleInteraction();
             }
             
@@ -4075,12 +4513,18 @@ class Main {
     }
 
     /**
-     * 更新小游戏
+     * 当前是否处于「小游戏」中（含结算完成、场景还没切回主图的那一帧）
+     *
+     * 为什么不能只看 MiniGameManager.isPlaying：
+     *   · 结算完成那一刻 isPlaying 就变 false 了，但 MiniGameScene 还要到下一帧才 exit、
+     *     主图才 enter —— 这一帧里事件驱动的按键 / 交互仍然可能进来（见 Main.handleKeyDown 规则0）；
+     *   · 用「场景 or 正在玩」两个条件一起判，才能把这段窗口彻底关掉。
+     * @returns {boolean}
      */
-    updateMiniGame(deltaTime, input) {
-        if (this.miniGameManager.isPlaying) {
-            this.miniGameManager.update(deltaTime, input);
-        }
+    isMiniGameActive() {
+        const scene = this.sceneManager ? this.sceneManager.getCurrentScene() : null;
+        if (scene && scene.sceneId === 'miniGame') return true;
+        return !!(this.miniGameManager && this.miniGameManager.isPlaying);
     }
 
     /**
@@ -4434,13 +4878,38 @@ class Main {
      * @param {Function} callback - 结束回调 (result) => void
      */
     startMiniGame(gameId, callback) {
+        // 已经在小游戏里（含结算完成、场景还没切回主图的那一帧）→ 拒绝重复启动。
+        // 旧行为：结算那一帧按住 E（浏览器连发 keydown）会被世界里的路标再次触发到这里 ——
+        // 既重开了一局小游戏，又把下面 switchScene('miniGame') 写进 nextSceneId，覆盖掉
+        // handleMiniGameEnd 刚登记的 'gameWorld' → 玩家以为退出了，其实还在小游戏里。
+        if (this.isMiniGameActive()) {
+            console.warn(`[小游戏] 已在小游戏中，忽略重复启动: ${gameId}`);
+            return false;
+        }
+
         // 保存进入小游戏时的玩家大地图坐标（结束时恢复）
         this._savedPlayerX = this.player.position.x;
         this._savedPlayerY = this.player.position.y;
+
+        // 输入隔离：放掉主图残留的「按住」按键（含刚按下但还没消费的瞬时键）
+        // 玩家按着 WASD 时按 E 进小游戏，那份按住状态会被小游戏读走 —— 角色一进局就被主图
+        // 的操作推着走：乘风采药里会直接飘到虚空瓦片上，风一停就坠落判失败。听感即
+        // 「刚听到胜利音效，紧接着又响失败音效」（玩家反馈，2026-09-13）。
+        this._resetInputForMiniGame();
         
         // 保存回调
         this.miniGameCallback = callback || null;
-        
+
+        // ===== 背景音乐：进小游戏 → 主图 BGM 立即停 =====
+        // · 逆流送灯：开局立刻循环播放小游戏 BGM（结束由 handleMiniGameEnd 立刻停）；
+        // · 乘风采药：不在这里起播 —— 只有起风时才循环播放（见 HerbCollectMiniGame._updateWind）；
+        // · 认灯归魂等其余小游戏：没有背景音乐，保持静音。
+        this.stopMainMapBgm();
+        const minigameBgm = AudioManager.getMinigameBgmKey(gameId);
+        if (this.audioManager && minigameBgm && gameId === 'boat_navigation') {
+            this.audioManager.playBgm(minigameBgm);
+        }
+
         // 切换到小游戏场景
         this.sceneManager.switchScene('miniGame', {
             gameId: gameId,
@@ -4451,10 +4920,39 @@ class Main {
     }
     
     /**
+     * 进小游戏前的输入隔离（见 Main.startMiniGame）
+     * - 清掉本帧瞬时键（刚按下还没消费的 E / WASD 不带进小游戏）
+     * - 清掉「按住不放」的键（大地图按着的方向键不带进小游戏；必须重新按才生效）
+     * 环境没提供对应方法时静默跳过（测试桩可能只有部分接口）。
+     * @returns {number} 被放掉的「按住」键数量（便于调试 / 断言）
+     */
+    _resetInputForMiniGame() {
+        if (!this.inputManager) return 0;
+        if (typeof this.inputManager.clearFrameState === 'function') {
+            this.inputManager.clearFrameState();
+        }
+        if (typeof this.inputManager.clearHeldKeys === 'function') {
+            return this.inputManager.clearHeldKeys();
+        }
+        return 0;
+    }
+
+    /**
      * 小游戏结束处理
      * @param {Object} result - 小游戏结果
      */
     handleMiniGameEnd(result) {
+        // ===== 背景音乐：小游戏结束 → 立刻停掉小游戏 BGM =====
+        // （乘风采药：起风时播的那首同样在这里收尾；回到大地图后主图 BGM 走 10 秒延迟）
+        if (this.audioManager) {
+            this.audioManager.stopBgm(this._minigameBgmKeys());
+        }
+
+        // ===== E 键保护期：刚结算回主图的这 0.5 秒不响应世界交互 =====
+        // 玩家结算那一刻通常还按着 E（采药 / 确认），浏览器会连发 keydown；若这一路
+        // keydown 落到脚下的「采药点」路标上，就会立刻又开一局（见 MINI_GAME_EXIT_GUARD_SECONDS）。
+        this._miniGameExitGuard = MINI_GAME_EXIT_GUARD_SECONDS;
+
         // 切换回之前的场景
         this.sceneManager.switchScene('gameWorld');
         
@@ -4469,6 +4967,11 @@ class Main {
             this.miniGameCallback(result);
             this.miniGameCallback = null;
         }
+    }
+
+    /** 全部小游戏 BGM 键（用于「只停小游戏音乐」） */
+    _minigameBgmKeys() {
+        return Object.keys(AudioManager.MINIGAME_BGM).map(gameId => AudioManager.MINIGAME_BGM[gameId]);
     }
 }
 

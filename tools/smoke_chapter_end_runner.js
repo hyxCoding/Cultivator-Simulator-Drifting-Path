@@ -305,7 +305,7 @@
         ending2Title: endingConfigs.ending_2 ? endingConfigs.ending_2.title : null,
         realm: main.player.playerData.realm,
         // 筑基结算后的玩家数值（Main.completeFoundationTrial → applyFoundationRealmStats）：
-        // 气血上限 200 且回满、灵息上限 100 且回满
+        // 气血上限 400 且回满、灵息上限 250 且回满
         playerStats: {
             realm: main.player.playerData.realm,
             stage: main.player.playerData.stage,
@@ -468,7 +468,7 @@
     };
     main.player.questSystem = playerQuestSystem;
 
-    // ---- 调试期：M 键重新用于打开 / 关闭世界地图（前两章传送按钮常开）----
+    // ---- M 键已按需求移除（第十三次改动）：按 M 不再打开 / 关闭世界地图 ----
     // 前置状态清零：若无对话 / 剧情对白 / 任务栏打开，handleKeyDown 会按规则 1/1b/2 提前返回
     mapTeleportCalls.length = 0;
     main.isFoundationTrialPlaying = false;
@@ -478,18 +478,15 @@
     main.questUI.isVisible = false;
     main.mapTeleport.isVisible = false;
     main.handleKeyDown('m', {});
-    const mKeyOpenCalls = mapTeleportCalls.slice();
-    const mKeyOpenedVisible = main.mapTeleport.isVisible === true;
     main.handleKeyDown('m', {});
     results.mKey = {
-        openCalls: mKeyOpenCalls,
-        opened: mKeyOpenCalls.length === 1 && mKeyOpenedVisible,
-        closeCalls: mapTeleportCalls.slice(),
-        closed: main.mapTeleport.isVisible === false,
+        calls: mapTeleportCalls.slice(),          // 期望空数组：一开一关都该「什么都不发生」
+        blocked: mapTeleportCalls.length === 0,
+        visibleAfter: main.mapTeleport.isVisible === true,
     };
     results.worldMapUnlockCalls = worldMapUnlockCalls.slice();
 
-    // ---- 战场内按 M 不开图：世界地图打开时战场胜负 / 死亡处理会停摆，而 Boss 仍在攻击 ----
+    // ---- 战场内按 M 同样毫无反应（M 已不再有任何开图能力，也就不会让战场流程停摆） ----
     const savedMapForArenaCheck = main.currentMap;
     main.currentMap = {
         mapId: main.bossArenaMapId, mapConfig: {}, npcs: new Map(), signposts: new Map(),
@@ -501,6 +498,17 @@
         opened: main.mapTeleport.isVisible === true,
     };
     main.currentMap = savedMapForArenaCheck;
+
+    // ---- 世界地图的剧情入口仍在：章末登船 / 完结后续登船（openWorldMapFromBerth → MapTeleport.show）----
+    // 说明：M 键移除只是取消「键盘调试入口」，世界地图本身与它的剧情打开方式都保留。
+    mapTeleportCalls.length = 0;
+    main.mapTeleport.isVisible = false;
+    main.openWorldMapFromBerth();
+    results.worldMapStoryEntry = {
+        calls: mapTeleportCalls.slice(),
+        visible: main.mapTeleport.isVisible === true,
+    };
+    main.mapTeleport.isVisible = false;
 
     // ---- 世界地图打开时：画面只保留世界地图本身（交互提示 / HUD / 任务栏都不渲染） ----
     const overlaySignpost = mapStub.signposts.get('signpost_depart_boat');
@@ -617,28 +625,44 @@
     probeTeleport.updateQuestGate(gateStub('completed'));
     const teleportVisibleWhenCompleted = probeTeleport.isActive;
 
-    // 玩家血量 / 灵息：练气初始值（GameConfig 境界表 + PlayerData 默认值 = 气血 100/100、灵息 50/50）
+    // 玩家血量 / 灵息：练气初始值（GameConfig 境界表 + PlayerData 默认值 = 气血 150/150、灵息 70/70）
     const lianqiRealm = GameConfig.getInstance().getRealm('lianqi');
     const zhujiRealm = GameConfig.getInstance().getRealm('zhuji');
     const freshPlayerData = new PlayerData({ realm: 'lianqi', stage: '初期' });
 
-    // 灵息自然恢复：真实 Player.updateManaRegen（每 2 秒 1 点，回满后不溢出）
+    // 灵息自然恢复：真实 Player.updateManaRegen（练气 每 1 秒 2 点，回满后不溢出）
     const regenPlayer = Object.create(Player.prototype);
     regenPlayer.isAlive = true;
     regenPlayer.playerData = new PlayerData({ realm: 'lianqi', stage: '初期' });
     regenPlayer.manaRegenTimer = 0;
     regenPlayer.playerData.mana = 0;
-    regenPlayer.updateManaRegen(1.9);
-    const regenAt1p9 = regenPlayer.playerData.mana;
+    regenPlayer.updateManaRegen(0.9);
+    const regenAt0p9 = regenPlayer.playerData.mana;
     regenPlayer.updateManaRegen(0.1);
-    const regenAt2 = regenPlayer.playerData.mana;
+    const regenAt1 = regenPlayer.playerData.mana;
     regenPlayer.updateManaRegen(4);
-    const regenAt6 = regenPlayer.playerData.mana;
+    const regenAt5 = regenPlayer.playerData.mana;
     regenPlayer.updateManaRegen(600);            // 长时间挂机：封顶在 maxMana
     const regenCapped = regenPlayer.playerData.mana;
     const regenTimerAtCap = regenPlayer.manaRegenTimer;
 
-    // 筑基突破：真实 Player.breakthrough（练气圆满 → 筑基：上限 200/100 并即时回满）
+    // 灵息自然恢复按境界分档（byRealm）：筑基 每 1 秒 4 点 / 结丹 每 1 秒 10 点
+    const probeRegen = (realmId, steps) => {
+        const probe = Object.create(Player.prototype);
+        probe.isAlive = true;
+        probe.playerData = new PlayerData({ realm: realmId, stage: '初期' });
+        probe.manaRegenTimer = 0;
+        probe.playerData.mana = 0;
+        steps.forEach(step => probe.updateManaRegen(step));
+        return probe.playerData.mana;
+    };
+    const zhujiRegenAt0p9 = probeRegen('zhuji', [0.9]);
+    const zhujiRegenAt1 = probeRegen('zhuji', [1]);
+    const zhujiRegenAt3 = probeRegen('zhuji', [3]);
+    const jiedanRegenAt1 = probeRegen('jiedan', [1]);
+    const jiedanRegenAt2p5 = probeRegen('jiedan', [2.5]);
+
+    // 筑基突破：真实 Player.breakthrough（练气圆满 → 筑基：上限 400/250 并即时回满）
     const breakthroughPlayer = Object.create(Player.prototype);
     breakthroughPlayer.isAlive = true;
     breakthroughPlayer.playerData = new PlayerData({ realm: 'lianqi', stage: '圆满' });
@@ -676,9 +700,15 @@
         freshPlayerMana: freshPlayerData.mana,
         freshPlayerMaxMana: freshPlayerData.maxMana,
         manaRegenConfig: GameConfig.getInstance().get('combat.manaRegen'),
-        regenAt1p9: regenAt1p9,
-        regenAt2: regenAt2,
-        regenAt6: regenAt6,
+        manaRegenByRealm: (GameConfig.getInstance().get('combat.manaRegen') || {}).byRealm,
+        zhujiRegenAt0p9: zhujiRegenAt0p9,
+        zhujiRegenAt1: zhujiRegenAt1,
+        zhujiRegenAt3: zhujiRegenAt3,
+        jiedanRegenAt1: jiedanRegenAt1,
+        jiedanRegenAt2p5: jiedanRegenAt2p5,
+        regenAt0p9: regenAt0p9,
+        regenAt1: regenAt1,
+        regenAt5: regenAt5,
         regenCapped: regenCapped,
         regenTimerAtCap: regenTimerAtCap,
         breakthroughAdvanced: breakthroughAdvanced,
@@ -1081,6 +1111,96 @@
     };
 
     main.returnFromBossArena = savedReturnFromBossArena;
+
+    // ============ 战败清场（第十三次改动）：被 Boss 打死 → 清技能效果 + 技能冷却清 0 ============
+    // 走真实 Main.returnFromBossArena 链路（前面的竞技场断言把它桩掉了，这里恢复真身）。
+    // 需求：「玩家与 boss 战斗中死亡后，清除自身的技能效果，如闪避技能的加速、护身术的伤害减免，
+    //       同时将所有技能的冷却时长清 0」。
+    {
+        const savedPlayerForDeathProbe = main.player;
+        // 用真实 Player 顶替主线里那个精简桩（清场要读 / 写 moveSpeed、revive 等真实接口）
+        main.player = new Player({
+            position: { x: 1000, y: 600 },
+            playerData: {
+                realm: 'lianqi', stage: '圆满', health: 150, maxHealth: 150,
+                mana: 70, maxMana: 70, lingShi: 0,
+            },
+            profession: { professionId: 'sanxiu' },
+        });
+        const combat = main.playerCombat;              // 真实 PlayerCombatSystem（构造时绑定同一个 Main）
+        const getCurrentMoveSpeed = typeof main.player.getCurrentMoveSpeed === 'function';
+
+        // 1) 造出「带增益 + 带冷却 + 受伤僵直 + 施法中」的死亡现场
+        main.player.moveSpeed = main.player.getCurrentMoveSpeed() * 1.25;   // 闪避加速生效中
+        combat.buffs.hutishu = 8;                     // 护身术剩 8 秒 → 减伤生效
+        combat.buffs.dodge = 9;                       // 闪避剩 9 秒 → 移速 +25% 生效
+        combat.cooldowns.hutishu = 22;
+        combat.cooldowns.dodge = 51;
+        combat.cooldowns.lingxidan = 2.5;
+        combat.cooldowns.attack = 0.3;
+        combat.hurtLock = 0.4;
+        combat.casting = { timer: 0.2 };
+        combat.hutishuAura = combat._spawnEffect('hutishu_aura', { follow: main.player, layer: 'under' });
+        combat.dodgeAura = combat._spawnEffect('dodge_aura', { follow: main.player, layer: 'under' });
+        main.player.isHurtLocked = true;
+        main.player.isCastingSkill = true;
+
+        const beforeDeathReset = {
+            speed: main.player.moveSpeed,
+            reduction: combat.getIncomingDamageMultiplier(),
+            cooldowns: Object.assign({}, combat.cooldowns),
+        };
+
+        // 2) 战场内阵亡 → Main.updateGameWorld 会命中死亡分支并调用 returnFromBossArena
+        main.player.isAlive = false;
+        main.bossArenaReturn = { mapId: 'qinglan_fuye', x: 2959, y: 358 };
+
+        // 3) 桩掉「回主图」的副作用（本节只看清场结果），其余全部走真实代码
+        const savedSwitchToMap = main.switchToMap;
+        const savedClearArenaResources = main.clearBossArenaResources;
+        const savedApplyBossFailureBonus = main.applyBossFailureBonus;
+        const savedAddGameNotification = main.addGameNotification;
+        const savedPlaySfx = main.playSfx;
+        const savedIsReturningFromBossArena = main.isReturningFromBossArena;
+        main.switchToMap = async () => ({ mapId: 'qinglan_fuye' });
+        main.clearBossArenaResources = () => true;
+        main.applyBossFailureBonus = () => false;
+        main.addGameNotification = () => {};
+        main.playSfx = () => false;
+        main.isReturningFromBossArena = false;
+
+        const deathReturn = await main.returnFromBossArena();
+
+        results.deathReset = {
+            returned: deathReturn === true,
+            hasMoveSpeedApi: getCurrentMoveSpeed,
+            before: beforeDeathReset,
+            after: {
+                damageMultiplier: combat.getIncomingDamageMultiplier(),
+                buffs: { hutishu: combat.buffs.hutishu, dodge: combat.buffs.dodge },
+                cooldowns: Object.assign({}, combat.cooldowns),
+                allCooldownsZero: Object.values(combat.cooldowns).every(v => v === 0),
+                speed: main.player.moveSpeed,
+                baseSpeed: main.player.getCurrentMoveSpeed(),
+                hurtLock: combat.hurtLock,
+                casting: combat.casting,
+                playerHurtLocked: main.player.isHurtLocked,
+                playerCasting: main.player.isCastingSkill,
+                hutishuAura: combat.hutishuAura,
+                dodgeAura: combat.dodgeAura,
+                alive: main.player.isAlive,
+            },
+        };
+
+        // 4) 还原探针改动（后续段落还要用原来的桩 player / 真实方法）
+        main.switchToMap = savedSwitchToMap;
+        main.clearBossArenaResources = savedClearArenaResources;
+        main.applyBossFailureBonus = savedApplyBossFailureBonus;
+        main.addGameNotification = savedAddGameNotification;
+        main.playSfx = savedPlaySfx;
+        main.isReturningFromBossArena = savedIsReturningFromBossArena;
+        main.player = savedPlayerForDeathProbe;
+    }
 
     // ============ 青岚浮野地图碰撞（collisionData 兜底 + 玩家碰撞盒 + 可达性） ============
     // 场景：以 file:// 直接双击打开 game.html 时读不到碰撞图像素（canvas.getImageData

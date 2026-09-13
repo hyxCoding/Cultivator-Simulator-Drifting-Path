@@ -40,6 +40,14 @@
  *    普通攻击（J）不占格子；剑影连斩（O）习得后才补出第 4 格。
  *    规格与路径见 CONFIG.hud.skillBar 与各技能的 hudIcon。
  *
+ * 11) 音效（单次播放，见 js/AudioManager.js）：只有技能 / 攻击**真的发动**才出声 ——
+ *    灵息不足、冷却中、教学未解锁、护体术与闪避互斥失败等都不播。
+ *      J 普通攻击 → sfx.player_attack ｜ U 灵息弹 → sfx.player_lingxidan（与释放动画同一时刻）
+ *      I 护体术   → sfx.player_hutishu ｜ L 闪避   → sfx.player_dodge
+ *      O 剑影连斩 → sfx.player_jianying
+ *    受伤音效（sfx.player_hurt）在 Player.takeDamage 里播放（正在播时不重播）。
+ *    音频文件缺失时静默跳过，不影响战斗逻辑。
+ *
  * 美术资源：战斗特效见 js/CombatEffect.js 顶部说明（资源缺失时自动使用程序化占位特效）；
  *          气血条 / 灵息条 / 左下角技能栏图标见 CONFIG.hud（assets/images/ui/ 下的图片）。
  */
@@ -223,7 +231,8 @@ class PlayerCombatSystem {
                     showName: false,    // 格子下方的技能名 —— 默认不画
                 },
             },
-            // 灵息回复：统一走 Player.updateManaRegen 的全局自然恢复（GameConfig.combat.manaRegen：每 2 秒 1 点）；
+            // 灵息回复：统一走 Player.updateManaRegen 的全局自然恢复（GameConfig.combat.manaRegen：
+            // 练气 1 秒 2 点 / 筑基 1 秒 4 点 / 结丹及以后 1 秒 10 点）；
             // 教学期不再额外加速回灵，需要补灵时由 TrainingManager 每完成一步回一部分。
         };
     }
@@ -569,7 +578,7 @@ class PlayerCombatSystem {
 
         // 2. 解锁判定：教学一开始就永久解锁
         //    灵息回复不在这里处理：统一走 Player.updateManaRegen 的全局自然恢复
-        //    （GameConfig.combat.manaRegen：每 2 秒 1 点），教学期同样吃这条规则。
+        //    （GameConfig.combat.manaRegen：练气 1 秒 2 点 / 筑基 1 秒 4 点 / 结丹 1 秒 10 点），教学期同样吃这条规则。
         const trainingManager = this.main ? this.main.trainingManager : null;
         if (trainingManager && trainingManager.isActive) {
             this.setUnlocked(true);
@@ -585,7 +594,7 @@ class PlayerCombatSystem {
         if (this.casting) return;
 
         // 6. UI / 战斗场景占用输入时不捕获
-        if (!this._canCaptureInput()) return;
+        if (!this._canCaptureInput(input)) return;
 
         // 7. 按键捕获（一帧只触发一个行为）
         //    教学期：只有站在对应教学圈内按提示按键才会施展，否则仅提示、不施展；
@@ -661,10 +670,74 @@ class PlayerCombatSystem {
     }
 
     /**
+     * 战败清场：清掉自身一切技能效果，并把所有技能冷却清 0
+     *
+     * 需求（第十三次改动，2026-09-13）：「玩家与 Boss 战斗中死亡后，清除自身的技能效果
+     * （闪避的加速、护身术的伤害减免），同时将所有技能的冷却时长清 0」。
+     *
+     * 与 _onBuffExpired 的区别：
+     *   · _onBuffExpired 是「Buff 自然到时」的收尾（收气场 + 还原移速），不动冷却；
+     *   · 本方法是「死亡」这条路的一次性清场：增益 / 气场 / 僵直 / 施法 / 冷却全部回到初始态，
+     *     复活（Player.revive）后就是干干净净的上场状态 —— 不会带着死亡前的加速、减伤
+     *     或「还差 50 秒」的技能冷却重新打第二轮。
+     *
+     * 为什么连 hurtLock / casting 一起清：死亡那一刻玩家可能正处在受伤僵直或灵息弹施法中，
+     * 不清的话复活后仍会被僵直锁住输入（Player.isHurtLocked 不会自己归位）、
+     * 或者继续把上一发的施法动画走完（同样属于「技能效果」的残留）。
+     *
+     * 调用点：Main.returnFromBossArena（战场内被 Boss 打至 isAlive=false 的唯一收尾路径）。
+     * @returns {boolean} 固定返回 true（便于调用点 / 断言判断「确实清过」）
+     */
+    resetOnDeath() {
+        // 1) 增益收尾：闪避（移速 +25% + 气场）/ 护身术（减伤 + 气场）
+        //    走与「自然到期」同一条路径（_onBuffExpired），保证移速按当前境界重新计算、
+        //    气场实例也从特效表里摘掉，不留任何加成残留。
+        if (this.buffs.hutishu > 0) {
+            this.buffs.hutishu = 0;
+            this._onBuffExpired('hutishu');
+        }
+        if (this.buffs.dodge > 0) {
+            this.buffs.dodge = 0;
+            this._onBuffExpired('dodge');
+        }
+        // 2) 兜底：buffs 已被别的路径清零、但气场实例还在的情况（例如效果被中途移除过）
+        if (this.hutishuAura) {
+            this._removeEffect(this.hutishuAura);
+            this.hutishuAura = null;
+        }
+        if (this.dodgeAura) {
+            this._removeEffect(this.dodgeAura);
+            this.dodgeAura = null;
+            if (this.player) this.player.moveSpeed = this.player.getCurrentMoveSpeed();
+            this._speedBonusApplied = false;
+        }
+
+        // 3) 冷却清 0：普通攻击 / 灵息弹 / 护体术 / 闪避 / 剑影连斩 全部可立即再用
+        for (const key in this.cooldowns) this.cooldowns[key] = 0;
+
+        // 4) 僵直 / 施法 / 屏幕提示
+        this.hurtLock = 0;
+        this.casting = null;
+        this.toast = { text: '', timer: 0 };
+        if (this.player) {
+            this.player.isHurtLocked = false;
+            this.player.isCastingSkill = false;
+        }
+
+        return true;
+    }
+
+    /**
      * 是否可以捕获战斗按键
+     *
+     * ⚠ 这里必须与「技能音效」用同一个判定：技能音效（_playSkillSfx）是在
+     * tryAttack / tryCastLingxidan / tryHutishu / tryDodge / tryCastJianying 内部、
+     * 各项校验通过之后才播的 —— 只有「按键进得来」与「音效出得来」共用本方法，
+     * 才不会出现「听见攻击音效、角色却没出招」这种对不上的情况。
+     * @param {Object} [input] - 输入状态（InputManager.getInputState()）
      * @returns {boolean}
      */
-    _canCaptureInput() {
+    _canCaptureInput(input) {
         const main = this.main;
         const player = this.player;
         if (!main || !player || !player.isAlive) return false;
@@ -672,6 +745,14 @@ class PlayerCombatSystem {
         // 只在游戏世界场景中生效（回合制战斗场景由 BattleScene 处理）
         const scene = main.sceneManager ? main.sceneManager.getCurrentScene() : null;
         if (!scene || scene.sceneId !== 'gameWorld') return false;
+
+        // 输入被「完全封锁」（渡厄使「控制」禁键 3 秒 / 筑基·结丹调息 / 完结字幕等，
+        // 见 InputManager.setInputBlocked）→ 与移动一样不吃战斗按键。
+        // 两处判定等价：input.combatBlocked 由 getInputState() 从 inputBlocked 推导而来，
+        // 只补第二处是为了兼容调用方手搓的输入对象（如调息时传入的 { pressedKeys: {} }）。
+        if (input && input.combatBlocked) return false;
+        if (main.inputManager && typeof main.inputManager.isInputBlocked === 'function'
+            && main.inputManager.isInputBlocked()) return false;
 
         if (player.isInBattle || player.isInteracting) return false;
         if (main.questUI && main.questUI.isVisible) return false;
@@ -696,6 +777,9 @@ class PlayerCombatSystem {
         const player = this.player;
         this._pay(cfg.manaCost);
         this.cooldowns.attack = cfg.cooldown;
+
+        // 普通攻击音效：确认真的发动了才播（灵息不足 / 冷却中都没有声音）
+        this._playSkillSfx('sfx.player_attack');
 
         // 包围主角的剑气（跟随主角，非循环）
         this._spawnEffect('sword_aura', {
@@ -740,6 +824,8 @@ class PlayerCombatSystem {
         // 施法（攻击动画）全过程
         this.casting = { timer: Math.max(0.05, cfg.castFrames / cfg.castFps) };
         player.isCastingSkill = true;
+        // 灵息弹音效：与释放动画同一时刻（确认真的发动了才播）
+        this._playSkillSfx('sfx.player_lingxidan');
         if (player.animationManager.hasAnimation(cfg.castAnimation)) {
             player.animationManager.play(cfg.castAnimation, {
                 reset: true,
@@ -776,6 +862,9 @@ class PlayerCombatSystem {
         this._pay(cfg.manaCost);
         this.cooldowns.hutishu = cfg.cooldown;
         this.buffs.hutishu = cfg.duration;
+
+        // 护体术音效：确认真的发动了才播（正在生效 / 闪避期间都不播）
+        this._playSkillSfx('sfx.player_hutishu');
 
         this.hutishuAura = this._spawnEffect('hutishu_aura', {
             spriteSheet: this.sprites.hutishuAura,
@@ -823,6 +912,9 @@ class PlayerCombatSystem {
         this.cooldowns.dodge = cfg.cooldown;
         this.buffs.dodge = cfg.duration;
 
+        // 闪避音效：确认真的发动了才播
+        this._playSkillSfx('sfx.player_dodge');
+
         // 通知教学（在瞬移之前：闪避会位移，需按按键时的站位判定训练圆球）
         this._notifyTraining(cfg.trainingAction);
 
@@ -868,6 +960,9 @@ class PlayerCombatSystem {
         const player = this.player;
         this._pay(cfg.manaCost);
         this.cooldowns.jianying = cfg.cooldown;
+
+        // 剑影连斩音效：确认真的发动了才播（按下瞬间出手）
+        this._playSkillSfx('sfx.player_jianying');
 
         // 四向剑气：立即生成（不写 casting → 受伤不会中断，与普攻同一套"按下瞬间结算"规则）
         PlayerCombatSystem.JIANYING_DIRECTIONS.forEach(direction => {
@@ -1064,6 +1159,18 @@ class PlayerCombatSystem {
         this.toast.text = text;
         this.toast.timer = 1.8;
         console.log('[PlayerCombat] ' + text);
+    }
+
+    /**
+     * 技能 / 攻击音效（单次播放）
+     * 只在技能真的发动后调用 —— 灵息不足 / 冷却中 / 教学未解锁 / 互斥失败都不会出声。
+     * 音频键与文件路径登记在 ResourceManager（assets/audio/sfx/*.mp3）；
+     * 文件缺失时 AudioManager 静默跳过，不会报错（见 js/AudioManager.js）。
+     * @param {string} key - 音频键，如 'sfx.player_attack'
+     * @returns {boolean} 是否真的发起了播放
+     */
+    _playSkillSfx(key) {
+        return gameAudio.playSfx(key);
     }
 
     // ==================== 施法（灵息弹攻击动画） ====================

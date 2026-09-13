@@ -20,6 +20,16 @@ class PlayerData {
         this.lingShi = config.lingShi || 0;              // 灵石
         this.basicSkillPoints = config.basicSkillPoints || 0;   // 基础修习点
         this.professionSkillPoints = config.professionSkillPoints || 0; // 职业悟道点
+
+        // ========== Boss 战败成长（每个战场各自计数，最多 5 次）==========
+        // bossFailures        ：{ 战场 id: 已战败次数 } —— 上限判定用
+        // maxHealthBonus      ：累计的永久气血上限加成（境界基准值之外的部分）
+        // maxManaBonus        ：累计的永久灵息上限加成
+        // 三者都随存档保存（见 serialize / deserialize）；境界切换时由
+        // Main.applyPermanentStatBonus 叠加在 GameConfig.realms 的基准值之上。
+        this.bossFailures = Object.assign({}, config.bossFailures || {});
+        this.maxHealthBonus = config.maxHealthBonus || 0;
+        this.maxManaBonus = config.maxManaBonus || 0;
         
         // 修炼相关
         this.cultivationProgress = config.cultivationProgress || 0; // 修炼进度
@@ -121,6 +131,9 @@ class PlayerData {
             lingShi: this.lingShi,
             basicSkillPoints: this.basicSkillPoints,
             professionSkillPoints: this.professionSkillPoints,
+            bossFailures: this.bossFailures,
+            maxHealthBonus: this.maxHealthBonus,
+            maxManaBonus: this.maxManaBonus,
             cultivationProgress: this.cultivationProgress,
             totalExperienceGained: this.totalExperienceGained,
             statistics: this.statistics,
@@ -144,6 +157,10 @@ class PlayerData {
         this.lingShi = data.lingShi || 0;
         this.basicSkillPoints = data.basicSkillPoints || 0;
         this.professionSkillPoints = data.professionSkillPoints || 0;
+        // Boss 战败成长（旧存档无这些字段 → 0 次 / 无加成）
+        this.bossFailures = Object.assign({}, data.bossFailures || {});
+        this.maxHealthBonus = data.maxHealthBonus || 0;
+        this.maxManaBonus = data.maxManaBonus || 0;
         this.cultivationProgress = data.cultivationProgress || 0;
         this.totalExperienceGained = data.totalExperienceGained || 0;
         this.statistics = data.statistics || this.statistics;

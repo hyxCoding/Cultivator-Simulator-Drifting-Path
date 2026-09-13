@@ -106,7 +106,16 @@ class DialogBox {
                 this.displayedText = this.currentText.substring(0, charsToShow);
             }
         }
-        this.buttons.forEach(b => b.update(0, 0, false, false, deltaTime));
+        // 选项按钮（this.buttons）的每帧更新由 Main.updateGameWorld 负责 —— 它会喂入本帧真实
+        // 鼠标坐标 / 点击状态，悬停（sfx.ui_hover）与点击（sfx.ui_click）判定都在 UIButton.update 里。
+        //
+        // ⚠ 补漏记录（2026-09-13）：这里本来还有一句
+        //     this.buttons.forEach(b => b.update(0, 0, false, false, deltaTime));
+        //   它每帧先用 (0,0) 空鼠标把选项按钮刷成「未悬停」，紧接着 Main 再用真实坐标 update 一次，
+        //   于是 UIButton 内部的 wasHovered 永远是 false → 鼠标停在 NPC 对话选项按钮上时，
+        //   滑过音效每帧重播（听感上就是一直响）。
+        //   开始界面「开始游戏」按钮与大地图传送按钮只被真实鼠标 update 一次，所以没这个毛病。
+        //   回归断言：tools/smoke_chapter2.js 第 14 节 + smoke_chapter2_runner.js 探针 R.audio.dialogHover。
     }
 
     render(ctx) {

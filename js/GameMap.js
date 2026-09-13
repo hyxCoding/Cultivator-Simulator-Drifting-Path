@@ -57,17 +57,22 @@ class GameMap {
         
         // === 场景动画相关 ===
         this.sceneAnimations = [];  // 场景动画实例列表
-        this.sceneParticles = [];   // 场景粒子列表（落叶、飘絮等）
+        this.sceneParticles = [];   // 通用场景粒子列表（扩展用；飘落物走 this.foliage，见 js/FallingFoliage.js）
         this.ambientEffects = [];   // 环境特效列表（雾气、光晕等）
         
         // === 场景动画配置 ===
         this.ambientConfig = {
-            // 粒子系统配置
-            fallingLeaves: {
-                enabled: true,
-                spawnRate: 0.5,      // 每秒生成数量
-                maxCount: 30,        // 最大粒子数
-                spawnArea: { x: 0, y: 0, width: 0, height: 0 }, // 生成区域（默认整个地图）
+            // 飘落物（落叶 / 落花）：图片帧动画 + 飘落轨迹，见 js/FallingFoliage.js
+            // enabled 由 initSceneAnimations 按地图判定（只在前两章主图开启），
+            // 地图配置 ambientConfig.fallingFoliage 可覆盖下面的参数（但不能把非主图打开）。
+            // maxCount = 界面中同时存在的最大飘落物数量（调节疏密就调它）
+            fallingFoliage: {
+                enabled: false,
+                maxCount: 18,
+                spawnRate: 1.1,
+                scale: 1,            // 单帧 16×16 → 显示 32×32
+                leafWeight: 0.6,     // 落叶 : 落花 = 6 : 4
+                flowerWeight: 0.4,
             },
             // 雾气效果
             fog: {
@@ -77,6 +82,10 @@ class GameMap {
                 speed: 0.02,
             },
         };
+
+        // 飘落物实例（落叶 / 落花；见 js/FallingFoliage.js）
+        // 在 initSceneAnimations 里按地图创建并判定是否开启（只有第一 / 第二章主图）
+        this.foliage = null;
     }
 
     /**
@@ -325,34 +334,39 @@ class GameMap {
         // 根据地图类型初始化不同的场景动画
         const mapName = this.mapConfig.name || '';
         
-        // 青岚浮野：落叶效果
-        if (mapName.includes('青岚') || this.mapId === 'qinglan_fuye') {
-            this.ambientConfig.fallingLeaves.enabled = true;
-            this.ambientConfig.fallingLeaves.spawnRate = 0.8;
-            this.ambientConfig.fallingLeaves.maxCount = 40;
-        }
-        
+        // 地图配置里的 ambientConfig = 「这张图想要的环境效果」（缺省不改动默认值）
+        const mapAmbient = this.mapConfig.ambientConfig || {};
+
         // 云渡泽：雾气效果
         if (mapName.includes('云渡') || this.mapId === 'yunduze') {
             this.ambientConfig.fog.enabled = true;
             this.ambientConfig.fog.opacity = 0.4;
         }
-        
-        // 设置粒子生成区域
-        if (this.backgroundImage) {
-            this.ambientConfig.fallingLeaves.spawnArea = {
-                x: 0,
-                y: 0,
-                width: this.backgroundImage.width,
-                height: this.backgroundImage.height,
-            };
-        } else {
-            this.ambientConfig.fallingLeaves.spawnArea = {
-                x: 0,
-                y: 0,
-                width: this.mapWidth * this.tileSize,
-                height: this.mapHeight * this.tileSize,
-            };
+        if (mapAmbient.fog) {
+            Object.assign(this.ambientConfig.fog, mapAmbient.fog);
+        }
+
+        // 飘落物（落叶 / 落花）：**只在前两章主图显示**（第一章青岚浮野 / 第二章云渡泽）。
+        // 判定用严格白名单 FallingFoliage.isFoliageMap()，不做地图名字模糊匹配 ——
+        // 小游戏、Boss 战场（boss_arena_ch1 / boss_arena_ch2）、世界地图以及以后新增的地图
+        // 一律默认不显示（历史上「名字里带青岚就飘叶子」的写法就是bug来源）。
+        // 地图配置可以调数量 / 速率 / 比例，但不能把非主图打开（enabled 以白名单为准）。
+        const foliageConfig = this.ambientConfig.fallingFoliage;
+        if (mapAmbient.fallingFoliage) {
+            Object.assign(foliageConfig, mapAmbient.fallingFoliage);
+        }
+        foliageConfig.enabled = (typeof FallingFoliage !== 'undefined')
+            && FallingFoliage.isFoliageMap(this.mapId)
+            && foliageConfig.enabled !== false;
+
+        // 创建 / 同步飘落物实例（贴图从 ResourceManager 取；缺图 → 程序化叶片 / 花瓣兜底）
+        if (typeof FallingFoliage !== 'undefined') {
+            if (this.foliage) {
+                this.foliage.applyConfig(foliageConfig);
+            } else {
+                this.foliage = new FallingFoliage(Object.assign({ name: `${this.mapId} 飘落物` }, foliageConfig));
+            }
+            this.foliage.loadImages();
         }
     }
 
@@ -697,110 +711,70 @@ class GameMap {
 
     /**
      * 更新场景动画
-     * 只处理地图本身的环境动画，如落叶、水流、飘动的旗帜等
+     * 只处理地图本身的环境动画，如飘落物（落叶 / 落花）、水流、飘动的旗帜等
      * @param {number} deltaTime - 时间增量（秒）
+     * @param {Object} [camera] - 摄像机（GameLoop 传入；飘落物按视口生成，使同屏数量稳定）
      */
-    updateSceneAnimations(deltaTime) {
+    updateSceneAnimations(deltaTime, camera) {
         if (!this.isActive) return;
-        
-        // 更新粒子生成
-        this.updateParticleSpawning(deltaTime);
-        
-        // 更新场景粒子
+
+        // 1. 飘落物（落叶 / 落花）：只在前两章主图开启（见 initSceneAnimations）
+        //    范围取摄像机视口 → config.maxCount 就是「界面中同时存在的最大飘落物数量」
+        if (this.foliage) {
+            this.foliage.setArea(this.getFoliageArea(camera));
+            this.foliage.update(deltaTime);
+        }
+
+        // 2. 更新通用场景粒子（容器保留，供扩展使用）
         this.sceneParticles.forEach(particle => {
             if (particle.update) {
                 particle.update(deltaTime);
             }
         });
         
-        // 更新环境特效
+        // 3. 更新环境特效
         this.ambientEffects.forEach(effect => {
             if (effect.update) {
                 effect.update(deltaTime);
             }
         });
         
-        // 更新场景动画实例
+        // 4. 更新场景动画实例
         this.sceneAnimations.forEach(animation => {
             if (animation.update) {
                 animation.update(deltaTime);
             }
         });
         
-        // 清理失效的粒子
+        // 5. 清理失效的粒子
         this.cleanupParticles();
     }
 
     /**
-     * 更新粒子生成
-     * @param {number} deltaTime - 时间增量（秒）
+     * 飘落物的活动范围（世界坐标）
+     * 有摄像机 → 取当前视口：飘落物只出现在屏幕附近，密度与地图大小无关
+     *            （青岚浮野 3344×1882 / 云渡泽 3200×1792，若按整图铺，
+     *              40 片撒在整张图上几乎看不见 —— 所以按视口来）
+     * 无摄像机（无头测试 / 一屏到底的战场）→ 退回整张地图范围
+     * @param {Object} [camera] - 摄像机实例
+     * @returns {Object} {x, y, width, height}
      */
-    updateParticleSpawning(deltaTime) {
-        const config = this.ambientConfig.fallingLeaves;
-        if (!config.enabled) return;
-        
-        // 检查粒子数量
-        if (this.sceneParticles.length >= config.maxCount) return;
-        
-        // 根据生成率生成新粒子
-        const spawnCount = config.spawnRate * deltaTime;
-        let actualSpawn = Math.floor(spawnCount);
-        
-        // 处理小数部分（概率生成）
-        if (Math.random() < spawnCount - actualSpawn) {
-            actualSpawn++;
+    getFoliageArea(camera) {
+        const cam = camera || null;
+        const width = cam ? (cam.width || 0) : 0;
+        const height = cam ? (cam.height || 0) : 0;
+        if (width > 0 && height > 0) {
+            const pos = (typeof cam.getRenderPosition === 'function')
+                ? cam.getRenderPosition()
+                : { x: cam.x || 0, y: cam.y || 0 };
+            return { x: pos.x, y: pos.y, width: width, height: height };
         }
-        
-        for (let i = 0; i < actualSpawn; i++) {
-            if (this.sceneParticles.length >= config.maxCount) break;
-            this.spawnFallingLeaf();
-        }
-    }
-
-    /**
-     * 生成一片落叶粒子
-     */
-    spawnFallingLeaf() {
-        const spawnArea = this.ambientConfig.fallingLeaves.spawnArea;
-        
-        const particle = {
-            x: spawnArea.x + Math.random() * spawnArea.width,
-            y: spawnArea.y - 20, // 从顶部生成
-            velocityX: -20 + Math.random() * 40, // 水平飘动速度
-            velocityY: 30 + Math.random() * 50,   // 下落速度
-            rotation: Math.random() * Math.PI * 2,
-            rotationSpeed: -1 + Math.random() * 2,
-            size: 4 + Math.random() * 6,
-            alpha: 0.6 + Math.random() * 0.4,
-            color: `rgba(180, 200, 160, ${0.6 + Math.random() * 0.4})`,
-            isAlive: true,
-            
-            update: function(deltaTime) {
-                this.x += this.velocityX * deltaTime;
-                this.y += this.velocityY * deltaTime;
-                this.rotation += this.rotationSpeed * deltaTime;
-                
-                // 飘动效果
-                this.x += Math.sin(this.y * 0.01) * 20 * deltaTime;
-                
-                // 超出地图范围则标记为死亡
-                if (this.y > spawnArea.y + spawnArea.height + 50) {
-                    this.isAlive = false;
-                }
-            },
-            
-            render: function(ctx, renderPos) {
-                ctx.save();
-                ctx.globalAlpha = this.alpha;
-                ctx.fillStyle = this.color;
-                ctx.translate(this.x - renderPos.x, this.y - renderPos.y);
-                ctx.rotate(this.rotation);
-                ctx.fillRect(-this.size / 2, -this.size / 4, this.size, this.size / 2);
-                ctx.restore();
-            },
+        return {
+            x: 0,
+            y: 0,
+            width: this.mapWidth * this.tileSize,
+            height: this.mapHeight * this.tileSize,
         };
-        
-        this.sceneParticles.push(particle);
     }
 
     /**
@@ -864,22 +838,28 @@ class GameMap {
         
         // 2. 渲染环境特效（在粒子下方）
         this.renderAmbientEffects(ctx, renderPos);
-        
-        // 3. 渲染场景粒子
+
+        // 3. 渲染飘落物（落叶 / 落花；环境装饰，画在交互物与实体之下）
+        //    renderPos 是摄像机视口左上角的世界坐标 → 飘落物按世界坐标存，这里转屏幕坐标
+        if (this.foliage) {
+            this.foliage.render(ctx, renderPos.x, renderPos.y);
+        }
+
+        // 4. 渲染场景粒子
         this.sceneParticles.forEach(particle => {
             if (particle.render) {
                 particle.render(ctx, renderPos);
             }
         });
         
-        // 4. 渲染场景动画
+        // 5. 渲染场景动画
         this.sceneAnimations.forEach(animation => {
             if (animation.render) {
                 animation.render(ctx, renderPos);
             }
         });
 
-        // 5. 渲染地图中的法阵（地图本身不做实体渲染，但法阵属于环境交互对象）
+        // 6. 渲染地图中的法阵（地图本身不做实体渲染，但法阵属于环境交互对象）
         if (this.teleporters) {
             this.teleporters.forEach(teleport => {
                 if (teleport && teleport.render) {
@@ -888,7 +868,7 @@ class GameMap {
             });
         }
 
-        // 6. 渲染可拾取物品（环境交互对象）
+        // 7. 渲染可拾取物品（环境交互对象）
         if (this.pickupItems) {
             this.pickupItems.forEach(pickup => {
                 if (pickup && pickup.render) {
@@ -897,7 +877,7 @@ class GameMap {
             });
         }
 
-        // 7. 渲染路标（环境交互对象）
+        // 8. 渲染路标（环境交互对象）
         if (this.signposts) {
             this.signposts.forEach(signpost => {
                 if (signpost && signpost.render) {
@@ -1233,7 +1213,19 @@ class GameMap {
         }
         
         if (data.ambientConfig) {
-            this.ambientConfig = data.ambientConfig;
+            // 逐层合并，而不是整块替换：
+            // 旧存档里只有旧的落叶字段 / fog，新字段 fallingFoliage 必须保留下来，
+            // 否则读档后 ambientConfig.fallingFoliage 变成 undefined → 飘落物配置丢失。
+            Object.keys(data.ambientConfig).forEach(key => {
+                const saved = data.ambientConfig[key];
+                if (saved && typeof saved === 'object' && this.ambientConfig[key]) {
+                    Object.assign(this.ambientConfig[key], saved);
+                } else {
+                    this.ambientConfig[key] = saved;
+                }
+            });
+            // 读档后重新按地图判定（非主图一定不飘）并把参数同步给飘落物实例
+            this.initSceneAnimations();
         }
         
         // 恢复玩家状态

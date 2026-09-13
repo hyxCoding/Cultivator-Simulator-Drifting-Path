@@ -5,6 +5,9 @@
  *   $env:ELECTRON_RUN_AS_NODE='1'
  *   & 'D:\Microsoft VS Code\Code.exe' tools\smoke_chapter2.js
  *
+ * 想把输出存成文件比对 / 归档（PowerShell 的 > 抓不到 Code.exe 的控制台输出）：
+ *   & 'D:\Microsoft VS Code\Code.exe' tools\smoke_capture.js tools\smoke_chapter2.js tools\c2_result.txt
+ *
  * 覆盖范围：
  *   1) 加载 game.html 中列出的全部 js（含新增的 Chapter2Config / DueBoss / LanternIdentifyMiniGame）
  *   2) 第二章任务链：6 条主线首尾相接、章内前置未完成不可接取（章首无跨章前置）、目标不可跳步
@@ -21,9 +24,32 @@
  *      每个障碍物超出视野计数 -1、最后一个消失即送达、撞上即失败）
  *   8) 渡厄使：7 套动画规格（单帧 96×96；待机列排列）、召唤小兵（上限 2）、冲刺（不可打断 + 圆形判定）、
  *      控制（禁键 3 秒 + 头顶锁链）、受击打断（播放中再次受伤不重播）、轴对齐追击、战败停帧 + 清空小兵
- *   9) 任务奖励：灵石 / 上限小增 / 丹药 / 技能点 / 境界 / 技能 / 解锁地图
+ *   9) 任务奖励（本轮平衡：任务不再发奖）/ Boss 战败成长（渡厄使 +35 气血 +20 灵息上限，上限 5 次）/
+ *      境界基准（练气 150/70 → 筑基 400/250 → 结丹 1000/500）/ 灵息恢复分档（练气 2/1s、筑基 4/1s、结丹 10/1s）
  *  10) 资源登记齐全 + 占位资源文件尺寸符合规格
  *  10b) 剑影连斩（O）：第二章主线一试炼传授 / 四向剑气 / 命中扩大圆 / 教学圈门控（唯一教学圈）
+ *  13) 飘落物（落叶 / 落花）：图片规格（1 行 12 帧 × 16×16 循环）/ 只在前两章主图 +
+ *      开始界面 + 完结界面显示（小游戏 / Boss 战场 / 世界地图不显示）/ maxCount 数量上限 /
+ *      飘落轨迹不是直线 / 12 帧循环 / 飘出边界回收 / 缺图程序化兜底（见第 13 节）
+ *  14) 音频：背景音乐（循环）+ 音效（单次）—— 资源登记（键 / 路径 / 资源分组 / 预加载 /
+ *      tools/音频资源清单.txt）/ 循环与单次播放 / 音效可叠加（池 4）与受伤音效不叠加 /
+ *      回主图 10 秒倒计时（重复调度重新计时）/ 进小游戏·Boss 关立即停 / 缺文件不报错
+ *      对话选项按钮的悬停音效只在「放上去」那一次播（鼠标停住不动不重播）
+ *      自动播放解锁（加载阶段的那一次点击也算数：交互监听在 AudioManager 构造时就绑上、
+ *      第一次点击 / 按键立刻补播被拦下的 BGM、game.html 有「点一下开启声音」提示）
+ *      小游戏结算互斥（成功 / 失败不会再同时结算 —— 乘风采药「最后一株草药同帧坠落」）
+ *      乘风采药进出闸门（结算当帧 / 回主图 0.5 秒内按住 E 不会再开一局；起风 BGM 由小游戏
+ *      在 complete / fail / exit 里自己收尾，不会出现「退出后还有起风 BGM、随后又播失败音效」）
+ *      同种音效 0.2 秒节流（SFX_MIN_INTERVAL，同一帧被播两次 / 连点不再重复出声）
+ *      乘风采药胜利锁定（采齐即置 isWinLocked：赢过就不再判失败；MiniGameManager 一局只结算一次
+ *      → 胜利与失败音效不会各响一次）、成功退出后的收尾对白、进小游戏时的输入隔离
+ *      （主图按住的方向键不带进小游戏，不会被推着飘进虚空）
+ *      乘风采药的「风」改成固定节奏（第十三次改动）：静风 5 秒 → 起风 3 秒 → 静风 5 秒……
+ *      （每阵风恰好 3 秒、两阵间隔 5 秒，不再随机）；无风只能在陆地走 / 有风才能上虚空 /
+ *      风停时还在虚空即失败；起风 BGM 与阵风窗口逐一对齐；小游戏每帧只更新一次
+ *      （Main.update 不再重复驱动 MiniGameManager）；认灯归魂顶部「目标灯序」提示已删除；
+ *      M 键打开世界地图的入口已删除（按 M 什么都不发生）
+ *      （见第 14 节）
  */
 
 const fs = require('fs');
@@ -184,24 +210,19 @@ async function main() {
             'chapter2_ending_1', 'chapter2_ending_2', null,
         ]), R.chain.next);
     check('order 依次为 1..6', R.chain.orders.join(',') === '1,2,3,4,5,6', R.chain.orders);
-    check('每条主线都配置了奖励（灵石或气血/灵息上限）',
-        R.chain.rewards.every(r => (r.lingShi || 0) > 0 || (r.maxHealth || 0) > 0 || (r.maxMana || 0) > 0),
-        R.chain.rewards);
-    check('主线一/二/三灵石合计 1200（策划案数值）', R.chain.lingShiMain3 === 1200, R.chain.lingShiMain3);
+    check('新平衡：6 条任务全部不再配置奖励（rewards 字段已移除）',
+        R.chain.rewardKeys.every(n => n === 0), R.chain.rewardKeys);
     check('主线一：第 3 个目标是完成剑修基础连招试炼（complete_training/sword）→ 试炼完成即传授剑影连斩',
         R.chain.objectives[0][2] && R.chain.objectives[0][2].type === 'complete_training'
-        && R.chain.objectives[0][2].target === 'sword'
-        && JSON.stringify(R.chain.rewards[0].skills) === JSON.stringify(['jianying']),
-        { objective: R.chain.objectives[0][2], rewards: R.chain.rewards[0] });
+        && R.chain.objectives[0][2].target === 'sword',
+        { objective: R.chain.objectives[0][2] });
     check('章末一《灯定丹成》只剩一个目标：完成结丹调息（不再有 learn_skill jianying）',
         R.chain.objectives[4].length === 1
         && R.chain.objectives[4][0].type === 'complete_core_trial'
         && R.chain.objectives[4][0].target === 'jiedan',
         R.chain.objectives[4]);
-    check('章末一奖励只剩灵石 +400 与境界→结丹（不再发技能、不再解锁照尘仙城）',
-        R.chain.rewards[4].lingShi === 400 && R.chain.rewards[4].realm === 'jiedan'
-        && R.chain.rewards[4].skills === undefined && R.chain.rewards[4].unlockMap === undefined,
-        R.chain.rewards[4]);
+    check('章末一不再配置奖励：境界→结丹由结丹调息结算写入（Main.applyRealmStats），不依赖 rewards.realm',
+        R.chain.rewardKeys[4] === 0, R.chain.rewardKeys);
     check('主线三《逆流送灯》目标链 = 5 项（ahe → 逆流行舟 → 江晚 → 陈栎 → 陆舟），soul_return 目标已删除',
         R.chain.objectives[2].map(o => o.type).join(',') === 'talk_to,complete_minigame,talk_to,talk_to,talk_to'
         && R.chain.objectives[2].map(o => o.target).join(',') === 'ahe,boat_navigation,jiangwan,chenli,luzhou'
@@ -424,6 +445,27 @@ async function main() {
     check('泊位登船路标位置 = 中央泊位 (587,1327)',
         R.gates.boatSignPosition.x === 587 && R.gates.boatSignPosition.y === 1327, R.gates.boatSignPosition);
 
+    // 回归：第一章章末舞台恢复（applyChapterEndStage）只作用于青岚浮野
+    //   老 bug：进云渡泽时照样执行 → ① 阿禾被挪到第一章码头瓦片（81,44）；
+    //          ② 泊位处冒出一个无任务门控的「登船前往照尘仙城」路标（按 E 还走第一章逻辑）
+    const endStageGuard = R.gates.chapterEndStageGuard || {};
+    check('第一章章末舞台恢复只作用于青岚浮野：对云渡泽不迁移阿禾（站位保持本章配置）',
+        endStageGuard.mapId === 'yunduze'
+        && endStageGuard.mapChapter === 2
+        && endStageGuard.hasIsChapter1Map === true
+        && endStageGuard.isChapter1Map === false
+        && endStageGuard.isChapter2Map === true
+        && endStageGuard.farewellFlag === true
+        && endStageGuard.aheAfter !== null
+        && endStageGuard.aheMoved === false,
+        endStageGuard);
+    check('第一章章末舞台恢复只作用于青岚浮野：不在云渡泽生成无门控「登船」路标',
+        endStageGuard.signpostsAfter === endStageGuard.signpostsBefore
+        && endStageGuard.boatSignpostOnMap === false
+        && endStageGuard.createDepartSignpostReturnedNull === true
+        && endStageGuard.signpostsAfterGuardCall === endStageGuard.signpostsBefore,
+        endStageGuard);
+
     section('8. 小游戏：认灯归魂 / 逆流送灯');
     check('认灯归魂：地图中心上/下/左/右各 200px 一盏魂灯，编号 1-4',
         R.lanternIdentify.lanternCount === 4
@@ -461,7 +503,7 @@ async function main() {
         && R.lanternIdentify.eHold.afterHold.eHeld === true
         && R.lanternIdentify.eHold.afterReleasePress === 1,
         R.lanternIdentify.eHold);
-    check('认灯归魂：同一帧被更新两次（MiniGameScene + Main.updateMiniGame）→ 第 4 盏不会被二次点亮',
+    check('认灯归魂：同一份 pressedKeys 连喂两帧（防御性回归：即便被重复驱动，第 4 盏也不会被二次点亮）',
         R.lanternIdentify.eSameFrame.litCount === 0
         && R.lanternIdentify.eSameFrame.litOrder.length === 0
         && R.lanternIdentify.eSameFrame.attemptsLeft === 2
@@ -613,6 +655,25 @@ async function main() {
     check('控制：持续 3 秒后自动恢复按键与锁链',
         R.boss.control.released === true, R.boss.control);
 
+    // 禁键期间「音效不能离开行为单独出现」：旧写法只禁移动 —— 被锁住时按 Q 仍会开任务栏并播
+    // sfx.ui_quest_panel、按 J/U/I/L 仍会出招并播技能音效（玩家听到声音、角色却该「一切按键无效」）。
+    const keyProbe = R.boss.control.keyProbe;
+    const probeQRow = keyProbe.unlocked.rows.find(r => r.key === 'q') || {};
+    const probeJRow = keyProbe.unlocked.rows.find(r => r.key === 'j') || {};
+    const probeSkillRows = keyProbe.unlocked.rows.filter(r => r.skills.length > 0);
+    check('控制禁键期间按键零反应：Q 不开任务栏、J/U/I/L/O 不出招（技能键根本没进 try*），且一声音效都不响',
+        keyProbe.locked.blocked === true && keyProbe.locked.canCapture === false
+        && keyProbe.locked.rows.every(r => r.sfx.length === 0 && r.skills.length === 0
+            && r.questUIVisible === false), keyProbe.locked);
+    check('对照（同一套按键 / 解除封锁后）：任务栏开 + 五个技能键全被捕获、'
+        + 'J 出招并播攻击音效（上面那条不是空转）',
+        keyProbe.unlocked.canCapture === true && probeQRow.questUIVisible === true
+        && probeQRow.sfx.indexOf('sfx.ui_quest_panel') !== -1
+        && probeSkillRows.length === 5
+        && probeJRow.sfx.indexOf('sfx.player_attack') !== -1
+        && keyProbe.unlocked.rows.every(r => r.key === 'q' || !(r.sfx.length > 0 && r.skills.length === 0)),
+        keyProbe.unlocked);
+
     check('气血归零 → 战败，且战败演出播完并停在最后一帧（可结算胜利）',
         R.boss.dead.isAlive === false && R.boss.dead.defeatSequenceFinished === true
         && R.boss.dead.finalFrame === 5, R.boss.dead);
@@ -620,19 +681,39 @@ async function main() {
         R.boss.dead.minionsBefore === 1 && R.boss.dead.minionsAfter === 0
         && R.boss.dead.minionsInMap === 0, R.boss.dead);
 
-    section('10. 任务奖励结算');
-    check('主线二：灵石 +400', R.rewards.after.lingShi - R.rewards.before.lingShi === 400, R.rewards.after);
-    check('主线二：灵息上限 +10（当前值同步补足）',
-        R.rewards.after.maxMana - R.rewards.before.maxMana === 10, R.rewards.after);
-    check('主线二：职业悟道点 +1', R.rewards.after.professionSkillPoints === 1, R.rewards.after);
-    check('主线二：回元丹 ×3 / 回灵丹 ×2',
-        R.rewards.huiyuanDan === 3 && R.rewards.huilingDan === 2, R.rewards);
-    check('结丹奖励：境界 → 结丹（气血 220 / 灵息 100 并回满）',
-        R.rewards.realm === 'jiedan' && R.rewards.maxHealth === 220 && R.rewards.maxMana === 100
-        && R.rewards.health === 220 && R.rewards.mana === 100, R.rewards);
-    check('结丹奖励不再重复发放剑影连斩（该技能在上述 complete_training sword 目标中传授）',
+    section('10. 任务奖励（已全部取消）与 Boss 战败成长');
+    check('6 条任务全部不再配置奖励（rewards 字段已移除）',
+        R.rewards.questRewardKeys.every(n => n === 0), R.rewards.questRewardKeys);
+    check('空 rewards 发奖不改变任何数值（灵石 / 上限 / 悟道点 / 丹药都不变）',
+        R.rewards.after.lingShi === R.rewards.before.lingShi
+        && R.rewards.after.maxHealth === R.rewards.before.maxHealth
+        && R.rewards.after.maxMana === R.rewards.before.maxMana
+        && R.rewards.after.health === R.rewards.before.health
+        && R.rewards.after.professionSkillPoints === R.rewards.before.professionSkillPoints
+        && R.rewards.huiyuanDan === R.rewards.before.huiyuanDan
+        && R.rewards.huilingDan === R.rewards.before.huilingDan, R.rewards);
+    check('结丹境界基准：气血 1000 / 灵息 500 并回满（Main.applyRealmStats）',
+        R.rewards.realm === 'jiedan' && R.rewards.maxHealth === 1000 && R.rewards.maxMana === 500
+        && R.rewards.health === 1000 && R.rewards.mana === 500, R.rewards);
+    check('渡厄使战败成长：每次 +35 气血 / +20 灵息上限，最多 5 次（第 6 次不再提升）',
+        R.rewards.dueFailures.length === 6
+        && R.rewards.dueFailures.slice(0, 5).every((s, i) => s.applied === true
+            && s.times === i + 1
+            && s.maxHealth === 435 + i * 35 && s.maxMana === 270 + i * 20)
+        && R.rewards.dueFailures[5].applied === false
+        && R.rewards.dueFailures[5].maxHealth === 575 && R.rewards.dueFailures[5].maxMana === 350,
+        R.rewards.dueFailures);
+    check('战败成长累计 175 气血 / 100 灵息上限，并随境界提升继续生效（结丹 1175 / 600）',
+        R.rewards.dueBonus.maxHealthBonus === 175 && R.rewards.dueBonus.maxManaBonus === 100
+        && R.rewards.realmWithBonus.maxHealth === 1175 && R.rewards.realmWithBonus.maxMana === 600
+        && R.rewards.realmWithBonus.health === 1175 && R.rewards.realmWithBonus.mana === 600,
+        { bonus: R.rewards.dueBonus, realm: R.rewards.realmWithBonus });
+    check('摄风山魈战败成长独立计数：+20 气血 / +10 灵息上限（练气 150/70 + 累计 175/100）',
+        R.rewards.shanxiao.applied === true && R.rewards.shanxiao.maxHealth === 345
+        && R.rewards.shanxiao.maxMana === 180, R.rewards.shanxiao);
+    check('结丹不再发放剑影连斩（该技能在上述 complete_training sword 目标中传授）',
         R.rewards.jianying === 0, R.rewards.jianying);
-    check('结丹奖励不再解锁照尘仙城（第三图未开放；世界地图按钮调试期常开）',
+    check('结丹不再解锁照尘仙城（第三图未开放；世界地图按钮调试期常开）',
         R.rewards.zhaochenFlag === false, R.rewards.zhaochenFlag);
     check('筑基圆满兜底：筑基初期的存档会被推到圆满（主线四门槛）',
         R.rewards.foundationStage === '圆满', R.rewards.foundationStage);
@@ -769,6 +850,12 @@ async function main() {
     check('Main 在任务完成时统一发奖', mainJs.indexOf('this.applyQuestRewards(questId, rewards)') !== -1);
     check('Main 有第二章章末流程（登船路标 / 结丹调息）',
         mainJs.indexOf('ensureChapter2BoatSignpost') !== -1 && mainJs.indexOf('startCoreFormationTrial') !== -1);
+    // 静态兜底：两个方法都必须带章节判断（运行时回归见第 7 节的 chapterEndStageGuard）
+    const restageSource = mainJs.slice(mainJs.indexOf('applyChapterEndStage(gameMap)'));
+    const departSignSource = mainJs.slice(mainJs.indexOf('createDepartSignpost(gameMap)'));
+    check('Main 的第一章章末舞台恢复 / 登船路标生成都带「仅第一章地图」判断（回归：进云渡泽时阿禾站位错 / 冒出登船路标）',
+        restageSource.length > 0 && restageSource.slice(0, 400).indexOf('this.isChapter1Map(map)') !== -1
+        && departSignSource.length > 0 && departSignSource.slice(0, 400).indexOf('this.isChapter1Map(map)') !== -1);
     check('Main 在剑修试炼（complete_training sword）完成的那一刻传授剑影连斩',
         mainJs.indexOf("trainingTarget === 'sword'") !== -1
         && mainJs.indexOf("this.learnProfessionSkill('jianying')") !== -1);
@@ -803,6 +890,7 @@ async function main() {
     // ---- 小游戏玩家精灵尺寸与大地图一致（48×64）----
     const miniGameBaseJs = fs.readFileSync(path.join(ROOT, 'js', 'MiniGame.js'), 'utf8');
     const herbGameJs = fs.readFileSync(path.join(ROOT, 'js', 'HerbCollectMiniGame.js'), 'utf8');
+const miniGameSceneJs = fs.readFileSync(path.join(ROOT, 'js', 'MiniGameScene.js'), 'utf8');
     const lanternGameJs = fs.readFileSync(path.join(ROOT, 'js', 'LanternIdentifyMiniGame.js'), 'utf8');
     check('玩家精灵显示尺寸统一：MiniGame 基类给出 48×64（大地图 Player 的绘制尺寸）',
         miniGameBaseJs.indexOf('this.playerSpriteWidth = 48') !== -1
@@ -900,6 +988,557 @@ async function main() {
         && mainJs.indexOf("playStoryDialogue('t04_escort_fail'") !== -1
         && mainJs.indexOf("'soul_return'") === -1
         && mainJs.indexOf("'complete_minigame', 'boat_navigation'") !== -1);
+
+    section('13. 飘落物（落叶 / 落花）：只在前两章主图 + 开始 / 完结界面显示，数量可调，轨迹非直线');
+    const foliageJs = fs.readFileSync(path.join(ROOT, 'js', 'FallingFoliage.js'), 'utf8');
+    const mainMenuJs = fs.readFileSync(path.join(ROOT, 'js', 'MainMenuScene.js'), 'utf8');
+    const endingJs = fs.readFileSync(path.join(ROOT, 'js', 'EndingScene.js'), 'utf8');
+    const gameLoopJs = fs.readFileSync(path.join(ROOT, 'js', 'GameLoop.js'), 'utf8');
+    const fl = R.foliage;
+    check('game.html 已引入 js/FallingFoliage.js',
+        files.indexOf('js/FallingFoliage.js') !== -1, files.filter(f => f.indexOf('Foliage') !== -1));
+    check('美术规格：两套贴图各 1 行 12 帧、单帧 16×16、12fps 循环（foliage.falling_leaf / falling_flower）',
+        fl.spriteKeys.join(',') === 'foliage.falling_leaf,foliage.falling_flower'
+        && fl.frameSpec.frameWidth === 16 && fl.frameSpec.frameHeight === 16
+        && fl.frameSpec.frameCount === 12 && fl.frameSpec.fps === 12
+        && foliageJs.indexOf('frameIndex = (p.frameIndex + advance) % frameCount') !== -1,
+        fl.frameSpec);
+    check('资源登记 + 预加载：foliage 资源分组 2 张图，Main.preloadInitialResources 显式写入两个键',
+        fl.resourcePaths.leaf === 'assets/images/foliage/falling_leaf.png'
+        && fl.resourcePaths.flower === 'assets/images/foliage/falling_flower.png'
+        && fl.resourcePaths.group.join(',')
+            === 'assets/images/foliage/falling_leaf.png,assets/images/foliage/falling_flower.png'
+        && mainJs.indexOf("'foliage.falling_leaf'") !== -1
+        && mainJs.indexOf("'foliage.falling_flower'") !== -1,
+        fl.resourcePaths);
+    check('占位美术已入库且尺寸为 192×16（12 帧 × 16×16）',
+        sizeEq(pngSize('assets', 'images', 'foliage', 'falling_leaf.png'), 192, 16)
+        && sizeEq(pngSize('assets', 'images', 'foliage', 'falling_flower.png'), 192, 16));
+    check('只在前两章主图显示：青岚浮野 / 云渡泽开启，两张 Boss 战场（含万灯台）关闭',
+        fl.mapWhitelist === 'qinglan_fuye,yunduze'
+        && fl.mapChecks.hasInstance.qinglan_fuye && fl.mapChecks.hasInstance.yunduze
+        && fl.mapChecks.hasInstance.boss_arena_ch1 && fl.mapChecks.hasInstance.boss_arena_ch2
+        && fl.mapChecks.enabled.qinglan_fuye === true && fl.mapChecks.enabled.yunduze === true
+        && fl.mapChecks.enabled.boss_arena_ch1 === false && fl.mapChecks.enabled.boss_arena_ch2 === false,
+        fl.mapChecks);
+    check('GameMap 用严格白名单判定（不再按地图名字模糊匹配），且非主图的配置无法把它打开',
+        gameMapJs.indexOf('FallingFoliage.isFoliageMap(this.mapId)') !== -1
+        && gameMapJs.indexOf("mapName.includes('青岚')") === -1
+        && gameMapJs.indexOf('fallingLeaves') === -1
+        && gameMapJs.indexOf('spawnFallingLeaf') === -1);
+    check('飘落物范围 = 摄像机视口（主图）/ 整张地图（无摄像机）',
+        fl.areaWithCamera.x === 300 && fl.areaWithCamera.y === 200
+        && fl.areaWithCamera.width === 1280 && fl.areaWithCamera.height === 720
+        && fl.areaWithoutCamera.width === R.map.yun.gridWidth
+        && fl.areaWithoutCamera.height === R.map.yun.gridHeight,
+        { withCamera: fl.areaWithCamera, withoutCamera: fl.areaWithoutCamera });
+    check('数量上限参数生效：maxCount = 3 时连跑 10 秒同屏峰值也不超过 3',
+        fl.cappedConfig === 3 && fl.cappedPeak > 0 && fl.cappedPeak <= 3, { peak: fl.cappedPeak });
+    check('飘落轨迹不是直线：横向左右往复（有左移也有右移、x 不单调）+ 竖向持续下落',
+        fl.trail.wentLeft > 0 && fl.trail.wentRight > 0 && fl.trail.xMonotonic === false
+        && fl.trail.descending === true, fl.trail);
+    check('12 帧循环：2 秒内 12 个帧号全部出现过，且推进 24 帧后回到起始帧',
+        fl.trail.frameCount === 12 && fl.trail.frameIndexAfter2s === 0, fl.trail);
+    check('飘出下边界即回收；enabled = false 时清空且不再生成',
+        fl.recycled === true && fl.disabledCount === 0, { recycled: fl.recycled, disabled: fl.disabledCount });
+    check('GameMap：updateSceneAnimations 接摄像机、render 里按世界坐标绘制飘落物',
+        gameMapJs.indexOf('updateSceneAnimations(deltaTime, camera)') !== -1
+        && gameMapJs.indexOf('this.foliage.setArea(this.getFoliageArea(camera))') !== -1
+        && gameMapJs.indexOf('this.foliage.render(ctx, renderPos.x, renderPos.y)') !== -1
+        && gameLoopJs.indexOf('updateSceneAnimations(deltaTime, this.camera)') !== -1);
+    check('开始界面：飘落物画在整屏背景之上、开始按钮之下（并随进场重新铺场）',
+        mainMenuJs.indexOf('new FallingFoliage(') !== -1
+        && mainMenuJs.indexOf('this.foliage.update(deltaTime)') !== -1
+        && mainMenuJs.indexOf('this.foliage.render(ctx)') !== -1
+        && mainMenuJs.indexOf('this.foliage.reset()') !== -1
+        && mainMenuJs.indexOf('this.foliage.render(ctx)') < mainMenuJs.indexOf('drawImage(this.buttonImage'));
+    check('游戏完结界面：飘落物画在背景之上、滚动字幕之下（并在进场 / 读档时重新铺场）',
+        endingJs.indexOf('new FallingFoliage(') !== -1
+        && endingJs.indexOf('this.foliage.update(dt)') !== -1
+        && endingJs.indexOf('this.foliage.render(ctx)') !== -1
+        && endingJs.indexOf('this.foliage.render(ctx)') > endingJs.indexOf('this.renderBackground(ctx, canvasWidth, canvasHeight)')
+        && endingJs.indexOf('this.foliage.render(ctx)') < endingJs.indexOf('this.renderLine(ctx, this.lines[i]')
+        && endingJs.indexOf('if (this.foliage) this.foliage.reset()') !== -1);
+    check('小游戏 / 世界地图不画飘落物（这两处不引用 FallingFoliage，主图停用后地图也不渲染）',
+        fs.readFileSync(path.join(ROOT, 'js', 'MapTeleport.js'), 'utf8').indexOf('FallingFoliage') === -1
+        && fs.readFileSync(path.join(ROOT, 'js', 'MiniGameScene.js'), 'utf8').indexOf('FallingFoliage') === -1
+        && fs.readFileSync(path.join(ROOT, 'js', 'MiniGame.js'), 'utf8').indexOf('Foliage') === -1
+        && gameMapJs.indexOf('render(ctx, camera) {') !== -1
+        && gameMapJs.indexOf('if (!this.isActive) return;') !== -1);
+    check('缺图兜底：两张贴图都缺失（含 32×32 品红占位图）时走程序化叶片 / 花瓣，不画品红块',
+        foliageJs.indexOf('drawProcedural') !== -1
+        && foliageJs.indexOf("img.src.indexOf('data:')") !== -1
+        && foliageJs.indexOf('FallingFoliage.isSpriteUsable(img') !== -1
+        && foliageJs.indexOf('_warnMissingArt') !== -1);
+
+    section('14. 音频：背景音乐（循环）+ 音效（单次）—— 资源登记 / 播放行为 / 回主图 10 秒 / 缺文件兜底');
+    const audioManagerJs = fs.readFileSync(path.join(ROOT, 'js', 'AudioManager.js'), 'utf8');
+    const uiButtonJs = fs.readFileSync(path.join(ROOT, 'js', 'UIButton.js'), 'utf8');
+    const mapAreaButtonJs = fs.readFileSync(path.join(ROOT, 'js', 'MapAreaButton.js'), 'utf8');
+    const mapTeleportJs = fs.readFileSync(path.join(ROOT, 'js', 'MapTeleport.js'), 'utf8');
+    const questUiJs = fs.readFileSync(path.join(ROOT, 'js', 'QuestUI.js'), 'utf8');
+    const playerCombatJs = fs.readFileSync(path.join(ROOT, 'js', 'PlayerCombat.js'), 'utf8');
+    const inputManagerJs = fs.readFileSync(path.join(ROOT, 'js', 'InputManager.js'), 'utf8');
+    const playerJs = fs.readFileSync(path.join(ROOT, 'js', 'Player.js'), 'utf8');
+    const shanxiaoJs = fs.readFileSync(path.join(ROOT, 'js', 'ShanxiaoBoss.js'), 'utf8');
+    const dueBossJs = fs.readFileSync(path.join(ROOT, 'js', 'DueBoss.js'), 'utf8');
+    const miniGameManagerJs = fs.readFileSync(path.join(ROOT, 'js', 'MiniGameManager.js'), 'utf8');
+    const gameWorldSceneJs = fs.readFileSync(path.join(ROOT, 'js', 'GameWorldScene.js'), 'utf8');
+    const audioManifestText = fs.readFileSync(path.join(ROOT, 'tools', '音频资源清单.txt'), 'utf8');
+    const dialogBoxJs = fs.readFileSync(path.join(ROOT, 'js', 'DialogBox.js'), 'utf8');
+    const au = R.audio;
+
+    check('game.html 已引入 js/AudioManager.js（第 1 层，紧接 ResourceManager）',
+        files.indexOf('js/AudioManager.js') !== -1
+        && files.indexOf('js/ResourceManager.js') < files.indexOf('js/AudioManager.js'),
+        files.filter(f => f.indexOf('AudioManager') !== -1));
+
+    // ---- 14.1 资源登记（键 / 路径 / 分组 / 预加载 / 地址清单）----
+    check('音频资源登记：6 首背景音乐 + 25 个音效，键与文件路径齐全（assets/audio/bgm|sfx/*.mp3）',
+        au.keys.bgmCount === 6 && au.keys.sfxCount === 25
+        && Object.keys(au.keys.paths).every(key => typeof au.keys.paths[key] === 'string'
+            && au.keys.paths[key].indexOf('assets/audio/') === 0)
+        && au.keys.paths['bgm.qinglan'] === 'assets/audio/bgm/qinglan.mp3'
+        && au.keys.paths['sfx.player_hurt'] === 'assets/audio/sfx/player_hurt.mp3'
+        && au.keys.paths['sfx.boss_shanxiao_slam'] === 'assets/audio/sfx/boss_shanxiao_slam.mp3'
+        && au.keys.paths['sfx.victory'] === 'assets/audio/sfx/victory.mp3', au.keys);
+    check('资源分组带上对应音频（mainMenu 1 / ending 1 / playerCombat 7 / bossArena 6 / bossArenaCh2 5）',
+        au.groups.mainMenu === 'bgm.main_menu' && au.groups.ending === 'bgm.ending'
+        && au.groups.playerCombat.split(',').length === 7
+        && au.groups.bossArena.split(',').length === 6
+        && au.groups.bossArenaCh2.split(',').length === 5, au.groups);
+    check('Main.preloadInitialResources 的音频列表已换成新键（旧的 battle_* 占位键已删除）',
+        mainJs.indexOf("'bgm.main_menu'") !== -1 && mainJs.indexOf("'bgm.minigame_boat'") !== -1
+        && mainJs.indexOf("'sfx.ui_quest_panel'") !== -1 && mainJs.indexOf("'sfx.boss_due_defeat'") !== -1
+        && mainJs.indexOf("'sfx.battle_attack'") === -1 && mainJs.indexOf("'sfx.game_success'") === -1);
+    check('音频地址清单已生成：tools/音频资源清单.txt 含每个键与路径',
+        audioManifestText.indexOf('assets/audio/bgm/main_menu.mp3') !== -1
+        && audioManifestText.indexOf('assets/audio/sfx/boss_due_control.mp3') !== -1
+        && audioManifestText.indexOf('assets/audio/sfx/minigame_lantern_extinguish.mp3') !== -1
+        && audioManifestText.indexOf('resources.audio') !== -1);
+
+    // ---- 14.2 播放行为（真实 AudioManager + 可观测 Audio 桩）----
+    check('背景音乐循环播放（loop = true）、音效单次播放（loop = false）',
+        au.play.bgmStarted === true && au.play.bgmLoop === true
+        && au.play.sfxStarted === true && au.play.sfxLoop === false);
+    check('同一首 BGM 已在播 → 不打断（不重头播、不新建元素）',
+        au.play.bgmKeyAfterPlay === 'bgm.qinglan' && au.play.bgmPlaying === true
+        && au.play.bgmElementKept === true);
+    check('同种音效 0.2 秒内不重复播放（SFX_MIN_INTERVAL）；间隔够了仍可叠加（池上限 4）',
+        au.statics.sfxMinInterval === 0.2
+        && au.play.throttleFirst === true && au.play.throttleRepeat === false
+        && au.play.throttleBeforeWindow === false && au.play.throttleAfterWindow === true
+        && au.play.throttleOtherKey === true
+        && au.statics.poolSize === 4 && au.play.uiPoolSize === 4 && au.play.uiLoop === false,
+        {
+            throttle: {
+                first: au.play.throttleFirst, repeat: au.play.throttleRepeat,
+                beforeWindow: au.play.throttleBeforeWindow, afterWindow: au.play.throttleAfterWindow,
+                otherKey: au.play.throttleOtherKey, minInterval: au.statics.sfxMinInterval,
+            },
+            pool: au.play.uiPoolSize,
+        });
+    check('受伤音效互斥：同一音效正在播放时这一次不播；播放结束后可再播',
+        au.play.exclusiveWhilePlaying === false && au.play.exclusiveAfterStop === true);
+    check('换 BGM：立即停当前 + 登记 10 秒倒计时（MAP_BGM_RETURN_DELAY）',
+        au.play.scheduled === true && au.play.afterSchedule.current === null
+        && au.play.afterSchedule.scheduled === 'bgm.yunduze'
+        && Math.abs(au.play.afterSchedule.timer - 10) < 1e-6 && au.statics.returnDelay === 10,
+        au.play.afterSchedule);
+    check('10 秒倒计时每次重新计时，倒计时结束才起播',
+        Math.abs(au.play.timerAfter9 - 1) < 1e-6
+        && Math.abs(au.play.timerAfterReschedule - 10) < 1e-6
+        && au.play.playedAfterDelay === 'bgm.yunduze', au.play);
+    check('stopBgm 可只停指定键：命中当前键才停；不含当前键时原样保留（完结界面 BGM 不受影响）',
+        au.play.stopOtherKeys === false && au.play.endingKept === 'bgm.ending'
+        && au.play.stopMapKeys === true && au.play.mapStopped === null, au.play);
+    check('缺失音频文件：播放返回 false、标记后不再重试；未登记的键也不抛错',
+        au.play.failStarted === true && au.play.failMarked === true && au.play.failRetry === false
+        && au.play.unknownSfxKey === false && au.play.unknownBgmKey === false, au.play);
+
+    // ---- 14.3 BGM 调度（主图 / 小游戏 / 开始界面 / 完结界面）----
+    const mf = au.mainFlow;
+    check('BGM 表：主图（青岚浮野 / 云渡泽）各一首；Boss 战场 / 未知地图没有 BGM',
+        au.statics.mapBgmQinglan === 'bgm.qinglan' && au.statics.mapBgmYunduze === 'bgm.yunduze'
+        && au.statics.mapBgmArena === null
+        && au.statics.isMapBgm === true && au.statics.isMapBgmEnding === false, au.statics);
+    check('BGM 表：小游戏（逆流送灯 / 乘风采药）各一首；认灯归魂没有 BGM',
+        au.statics.boatBgm === 'bgm.minigame_boat' && au.statics.herbBgm === 'bgm.minigame_herb'
+        && au.statics.lanternBgm === null);
+    check('首次进入大地图（点开始游戏）立即播本图 BGM，不走 10 秒延迟；离开大地图立即停',
+        mf.firstEntryKey === 'bgm.qinglan' && mf.firstEntryScheduled === null
+        && mf.afterExitKey === null, mf);
+    check('回到主图（小游戏退出 / Boss 关退出 / 另一张地图）→ 10 秒后才播，且每次重新计时',
+        mf.secondEntry.key === null && mf.secondEntry.scheduled === 'bgm.qinglan'
+        && Math.abs(mf.secondEntry.timer - 10) < 1e-6
+        && mf.rescheduled.scheduled === 'bgm.yunduze' && Math.abs(mf.rescheduled.timer - 10) < 1e-6,
+        mf);
+    check('进 Boss 关：主图 BGM 立即停（连 10 秒倒计时一起取消）',
+        mf.inArena.key === null && mf.inArena.scheduled === null, mf.inArena);
+    check('从 Boss 关回主图 → 10 秒倒计时；同一张地图内重新落点不动音乐',
+        mf.backFromArena.scheduled === 'bgm.yunduze' && Math.abs(mf.backFromArena.timer - 10) < 1e-6
+        && mf.sameMapScheduled === 'bgm.yunduze', mf);
+    check('世界地图（打开时不停 BGM）：MapTeleport 不碰任何音频',
+        mapTeleportJs.indexOf('gameAudio') === -1 && mapTeleportJs.indexOf('Bgm') === -1);
+    check('开始界面：进场立刻循环播放菜单 BGM，点「开始游戏」立刻停止',
+        mainMenuJs.indexOf("gameAudio.playBgm('bgm.main_menu')") !== -1
+        && mainMenuJs.indexOf("gameAudio.stopBgm('bgm.main_menu')") !== -1
+        && mainMenuJs.indexOf("gameAudio.stopBgm('bgm.main_menu')")
+            < mainMenuJs.indexOf("this.main.sceneManager.switchScene('gameWorld')"));
+    check('完结界面：进场（滚动字幕开始）循环播放，退出界面才停止',
+        endingJs.indexOf("gameAudio.playBgm('bgm.ending')") !== -1
+        && endingJs.indexOf("gameAudio.stopBgm('bgm.ending')") !== -1
+        && endingJs.indexOf("gameAudio.stopBgm('bgm.ending')")
+            > endingJs.indexOf("gameAudio.playBgm('bgm.ending')"));
+    check('逆流送灯：开局立刻播小游戏 BGM、结束立刻停（Main.startMiniGame / handleMiniGameEnd 统一管）',
+        mainJs.indexOf("gameId === 'boat_navigation'") !== -1
+        && mainJs.indexOf('AudioManager.getMinigameBgmKey(gameId)') !== -1
+        && mainJs.indexOf('this.audioManager.stopBgm(this._minigameBgmKeys())') !== -1
+        && boatJs.indexOf('gameAudio') === -1);
+
+    check('乘风采药：只在起风期间循环播放 BGM；风停 / 重新开局立即停',
+        herbGameJs.indexOf("gameAudio.playBgm('bgm.minigame_herb')") !== -1
+        && herbGameJs.indexOf("gameAudio.stopBgm('bgm.minigame_herb')") !== -1
+        && herbGameJs.indexOf("gameAudio.playBgm('bgm.minigame_herb')")
+            > herbGameJs.indexOf('this.wind.active = true')
+        && herbGameJs.indexOf("gameAudio.stopBgm('bgm.minigame_herb')")
+            > herbGameJs.indexOf('this.wind.active = false'));
+    check('乘风采药采到草药播拾取音效；Main 拾取任务道具也播同一个音效',
+        herbGameJs.indexOf("gameAudio.playSfx('sfx.pickup')") !== -1
+        && mainJs.indexOf("this.playSfx('sfx.pickup')") !== -1);
+    check('认灯归魂：每点亮一盏播亮灯音效；猜错且还有机会时（熄灭前）播灭灯音效',
+        lanternGameJs.indexOf("gameAudio.playSfx('sfx.minigame_lantern_light')") !== -1
+        && lanternGameJs.indexOf("gameAudio.playSfx('sfx.minigame_lantern_extinguish')") !== -1
+        && lanternGameJs.indexOf("gameAudio.playSfx('sfx.minigame_lantern_extinguish')")
+            < lanternGameJs.indexOf('this._extinguishAll();'));
+    check('小游戏成功 / 失败各播一次胜利 / 失败音效',
+        miniGameManagerJs.indexOf("gameAudio.playSfx('sfx.victory')") !== -1
+        && miniGameManagerJs.indexOf("gameAudio.playSfx('sfx.defeat')") !== -1);
+    check('玩家技能音效：J/U/I/L/O 经 _playSkillSfx 播放（灵息 / 冷却校验通过之后才出声）',
+        playerCombatJs.indexOf("this._playSkillSfx('sfx.player_attack')") !== -1
+        && playerCombatJs.indexOf("this._playSkillSfx('sfx.player_lingxidan')") !== -1
+        && playerCombatJs.indexOf("this._playSkillSfx('sfx.player_hutishu')") !== -1
+        && playerCombatJs.indexOf("this._playSkillSfx('sfx.player_dodge')") !== -1
+        && playerCombatJs.indexOf("this._playSkillSfx('sfx.player_jianying')") !== -1
+        && playerCombatJs.indexOf("this._playSkillSfx('sfx.player_attack')")
+            > playerCombatJs.indexOf('if (!this._checkCost(cfg)) return false;'));
+    check('静态守卫：音效与行为同一条判定 —— 封锁输入时既不捕获战斗键（_canCaptureInput）也不出技能音效；'
+        + 'Main.handleKeyDown 同样按 isInputBlocked 提前返回',
+        playerCombatJs.indexOf('if (!this._canCaptureInput(input)) return;') !== -1
+        && playerCombatJs.indexOf('_canCaptureInput(input) {') !== -1
+        && playerCombatJs.indexOf('input.combatBlocked') !== -1
+        && playerCombatJs.indexOf('isInputBlocked()') !== -1
+        && inputManagerJs.indexOf('isInputBlocked() {') !== -1
+        && mainJs.indexOf('this.inputManager.isInputBlocked()') !== -1);
+    check('玩家受伤：每次受伤播一次，正在播时不重播（playSfxExclusive）',
+        playerJs.indexOf("gameAudio.playSfxExclusive('sfx.player_hurt')") !== -1
+        && playerJs.indexOf("gameAudio.playSfxExclusive('sfx.player_hurt')")
+            > playerJs.indexOf('this.playerData.health -= actualDamage;'));
+    check('摄风山魈：蓄力 / 横扫 / 扑击 / 砸地 / 受伤 / 战败 六个音效全部接上',
+        ['charge', 'sweep', 'pounce', 'slam', 'hurt', 'defeat'].every(name =>
+            shanxiaoJs.indexOf(`'sfx.boss_shanxiao_${name}'`) !== -1));
+    check('渡厄使：召唤 / 冲刺 / 控制 / 受伤 / 战败 五个音效全部接上',
+        ['summon', 'dash', 'control', 'hurt', 'defeat'].every(name =>
+            dueBossJs.indexOf(`'sfx.boss_due_${name}'`) !== -1));
+    check('两个 Boss 的受伤音效都不叠加（_playSfxExclusive），战败音效在 enterDead 里',
+        shanxiaoJs.indexOf("this._playSfxExclusive('sfx.boss_shanxiao_hurt')") !== -1
+        && dueBossJs.indexOf("this._playSfxExclusive('sfx.boss_due_hurt')") !== -1
+        && shanxiaoJs.indexOf("this._playSfx('sfx.boss_shanxiao_defeat')") !== -1
+        && dueBossJs.indexOf("this._playSfx('sfx.boss_due_defeat')") !== -1);
+    check('Boss 胜利音效：打赢后只挂标记，走归途法阵回原位置时才播（不会再进战场误播）',
+        mainJs.indexOf('this.pendingBossVictorySound = true') !== -1
+        && mainJs.indexOf('isBossArenaExitArray(teleportArray)') !== -1
+        && mainJs.indexOf('this.pendingBossVictorySound = false') !== -1
+        && mainJs.indexOf("this.playSfx('sfx.victory')") !== -1
+        && mainJs.indexOf("this.playSfx('sfx.defeat')") !== -1);
+    check('UI 音效：所有按钮滑过 / 点击都出声；任务栏开 / 关同一个音效',
+        uiButtonJs.indexOf("gameAudio.playSfx('sfx.ui_hover')") !== -1
+        && uiButtonJs.indexOf("gameAudio.playSfx('sfx.ui_click')") !== -1
+        && mapAreaButtonJs.indexOf("gameAudio.playSfx('sfx.ui_hover')") !== -1
+        && mapAreaButtonJs.indexOf("gameAudio.playSfx('sfx.ui_click')") !== -1
+        && questUiJs.indexOf("gameAudio.playSfx('sfx.ui_quest_panel')") !== -1
+        && (questUiJs.match(/gameAudio\.playSfx\('sfx\.ui_quest_panel'\)/g) || []).length === 2);
+    check('大地图场景进出都会通知 Main（首次立即播 / 返回 10 秒）；Main.update 推进 10 秒倒计时',
+        gameWorldSceneJs.indexOf('this.main.onGameWorldSceneEnter()') !== -1
+        && gameWorldSceneJs.indexOf('this.main.onGameWorldSceneExit()') !== -1
+        && mainJs.indexOf('this.audioManager.update(deltaTime)') !== -1);
+    check('AudioManager 兜底：没有 Audio 实现 / 播放失败 / 自动播放被拦都不抛错',
+        audioManagerJs.indexOf("if (typeof Audio !== 'function') return null") !== -1
+        && audioManagerJs.indexOf('promise.catch(') !== -1
+        && audioManagerJs.indexOf('NotAllowedError') !== -1
+        && audioManagerJs.indexOf('entry.failed = true') !== -1);
+
+    // ---- 14.4 对话选项按钮的悬停音效（鼠标停住不动不能每帧重播）----
+    const dh = au.dialogHover;
+    check('对话选项按钮：鼠标停在按钮上 10 帧只播一次滑过音效（不再每帧重播）',
+        dh.hoverHoldPlays === 1, dh);
+    check('对话选项按钮：移开不出声、移开再放回再响一次（进入 / 离开判定正确）',
+        dh.hoverLeavePlays === 0 && dh.hoverReenterPlays === 1, dh);
+    check('对话选项按钮：点击播一次点击音效，悬停上移量接近 -5px',
+        dh.clickPlays === 1 && dh.hoverOffset <= -4, dh);
+    const dialogBoxHoverClobber = dialogBoxJs.split(/\r?\n/).some(line => {
+        const code = line.replace(/\/\/.*$/, '');         // 注释里的历史写法不算
+        return /\.update\(\s*0\s*,\s*0\s*,\s*false\s*,\s*false/.test(code);
+    });
+    check('选项按钮唯一更新点是 Main（真实鼠标）：DialogBox.update 不再用 (0,0) 空鼠标刷悬停状态',
+        dialogBoxHoverClobber === false
+        && /this\.dialogBox\.buttons\.forEach[\s\S]{0,120}?button\.update\([\s\S]{0,60}?input\.mouseX/.test(mainJs),
+        { clobber: dialogBoxHoverClobber });
+
+    // ---- 14.5 自动播放解锁（加载阶段的那一次点击也算数，并被用来立刻补播）----
+    //      背景（2026-09-13 修）：旧写法只在「播放真的被拦下」时才绑交互监听，
+    //      加载界面（loadingOverlay）上的那次点击被白白浪费 → 玩家得在开始界面再点一次才听得到声音。
+    const gameHtml = fs.readFileSync(path.join(ROOT, 'game.html'), 'utf8');
+    const unlock = au.unlock;
+    check('自动播放被拦下：记住这首歌等玩家交互（pending = true，尚未出声）',
+        unlock.gestureBeforePlay === false && unlock.startedBlocked === true
+        && unlock.pendingAfterBlock.pending === true
+        && unlock.pendingAfterBlock.key === 'bgm.main_menu'
+        && unlock.pendingAfterBlock.playing === false
+        && unlock.pendingAfterBlock.gesture === false, unlock.pendingAfterBlock);
+    check('玩家第一次交互：立刻补播被拦下的 BGM，并触发 onUnlock 一次（加载界面据此收起提示）',
+        unlock.afterGesture.retried === true && unlock.afterGesture.gesture === true
+        && unlock.afterGesture.pending === false
+        && unlock.afterGesture.current === 'bgm.main_menu'
+        && unlock.afterGesture.playing === true
+        && unlock.afterGesture.unlockCallbacks === 1, unlock.afterGesture);
+    check('重复交互无害（不重复补播 / 不重复回调）；加载阶段「先点击后起播」时不再被拦',
+        unlock.afterSecondGesture.secondGesture === false
+        && unlock.afterSecondGesture.unlockCallbacks === 1
+        && unlock.afterSecondGesture.current === 'bgm.main_menu'
+        && unlock.afterEarlyGesture.gestureFirst === true
+        && unlock.afterEarlyGesture.playAfterGesture === true
+        && unlock.afterEarlyGesture.playing === true, unlock.afterEarlyGesture);
+    check('交互监听在 AudioManager 构造时就绑（不是等播放被拦下才绑）+ 公开 hasUserGesture / isBgmPending / onUnlock',
+        /constructor\(\)[\s\S]{0,2200}?this\._bindUserGestureUnlock\(\);/.test(audioManagerJs)
+        && audioManagerJs.indexOf("const events = ['pointerdown', 'mousedown', 'keydown', 'touchstart'];") !== -1
+        && audioManagerJs.indexOf('handleUserGesture() {') !== -1
+        && audioManagerJs.indexOf('hasUserGesture() {') !== -1
+        && audioManagerJs.indexOf('isBgmPending() {') !== -1
+        && audioManagerJs.indexOf('this.onUnlock') !== -1);
+    check('Main.init 加载阶段就先试播开始界面 BGM（早于资源预加载）+ game.html 有「点一下开启声音」提示',
+        mainJs.indexOf('this.startMenuBgmEarly();') !== -1
+        && mainJs.indexOf('this.startMenuBgmEarly();') > mainJs.indexOf('async init(canvasId)')
+        && mainJs.indexOf('this.startMenuBgmEarly();') < mainJs.indexOf('await this.preloadInitialResources();')
+        && mainJs.indexOf('startMenuBgmEarly() {') !== -1
+        && gameHtml.indexOf('id="soundHint"') !== -1
+        && gameHtml.indexOf('updateSoundHint') !== -1
+        && gameHtml.indexOf('manager.isBgmPending()') !== -1);
+    // 加载界面（game.html 的内联启动脚本）语法自检 —— 音频提示逻辑就写在里面
+    const inlineMatch = gameHtml.match(/<script>([\s\S]*?)<\/script>/);
+    let inlineSyntaxOk = false;
+    let inlineSyntaxError = null;
+    try {
+        if (inlineMatch) {
+            new vm.Script(inlineMatch[1].replace(/^\uFEFF/, ''), { filename: 'game.html#inline' });
+            inlineSyntaxOk = true;
+        }
+    } catch (error) {
+        inlineSyntaxError = error.message;
+    }
+    check('game.html 内联启动脚本语法正确（加载界面音频提示 + 存档弹窗 + 启动流程）',
+        inlineSyntaxOk, inlineSyntaxError);
+
+    // ---- 14.6 小游戏结算互斥（成功 / 失败不会同时播放）----
+    //      背景（2026-09-13 修）：乘风采药「先判坠落、再判采齐」+ 基类两种结算都能重复触发，
+    //      采到最后一株草药时若同帧风停 → 成功与失败音效一起响、结算界面连开两次（偶发）。
+    const mr = au.miniResult;
+    check('小游戏基类：同一局只结算一次（重复 complete / 失败后再 complete 都不再触发回调）',
+        mr.baseFirst === true && mr.baseSecond === false && mr.baseCompletes === 1
+        && mr.reversedFail === true && mr.reversedThenComplete === false
+        && mr.reversedCompletes === 0, mr);
+    check('乘风采药：最后一株草药在虚空上、同帧风停 → 只结算成功一次（不再成功 + 失败齐响）',
+        mr.herbWin.voidTile === true
+        && mr.herbWin.collected === mr.herbWin.required
+        && mr.herbWin.isCompleted === true && mr.herbWin.isFailed === false
+        && mr.herbWin.resultSuccess === true
+        && mr.herbWin.events.join(',') === 'complete'
+        && mr.herbWin.played.filter(key => key === 'sfx.victory').length === 1
+        && mr.herbWin.played.indexOf('sfx.defeat') === -1, mr.herbWin);
+    check('乘风采药：没采齐时坠落照样判失败一次（失败路径没被改坏）',
+        mr.herbFall.isFailed === true && mr.herbFall.isCompleted === false
+        && mr.herbFall.events.join(',') === 'fail'
+        && mr.herbFall.played.filter(key => key === 'sfx.defeat').length === 1
+        && mr.herbFall.played.indexOf('sfx.victory') === -1, mr.herbFall);
+    check('静态守卫：采药先判采齐再判坠落、坠落/失败判定带胜利锁定与 isRunning 闸门；基类结算方法都有闸门',
+        (() => {
+            const update = herbGameJs.slice(herbGameJs.indexOf('update(dt, input) {'),
+                herbGameJs.indexOf('_readInput(input) {'));
+            const winAt = update.indexOf('if (this.collectedHerbs >= this.requiredHerbs) {');
+            const fallAt = update.indexOf('this._checkVoidFall();');
+            return winAt !== -1 && fallAt !== -1 && winAt < fallAt
+                && /if \(!this\.isRunning\) return;\s*\/\/ 已经结算/.test(herbGameJs)
+                && /_checkVoidFall\(\) \{\s*if \(this\.isWinLocked\) return;/.test(herbGameJs)
+                // 基类：complete / fail 都带「同一局只结算一次」闸门；fail 额外认胜利锁定
+                && miniGameBaseJs.indexOf('if (this.isCompleted || this.isFailed) return false;') !== -1
+                && miniGameBaseJs.indexOf('if (this.isWinLocked || this.isCompleted) return false;') !== -1;
+        })());
+
+    // ---- 14.7 乘风采药：结算后按住 E 不会再重开一局；起风 BGM 由小游戏自己收尾 ----
+    //      对应 bug（玩家反馈）：「小游戏胜利了，退出后……还有小游戏起风时的背景音效，
+    //      过一会小游戏背景音效停止了，然后又播放失败音效」。
+    const hx = au.herbExit;
+    check('乘风采药：起风期间循环播放起风 BGM（起风那一刻 currentBgmKey = bgm.minigame_herb）',
+        hx.bgmAtWindStart === 'bgm.minigame_herb', hx.bgmAtWindStart);
+    check('结算成功：只播一次胜利音效、不播失败音效；起风 BGM 由小游戏自己停（complete 里先 _stopWindBgm）',
+        hx.afterWin.completed === true && hx.afterWin.failed === false && hx.afterWin.running === false
+        && hx.afterWin.played.filter(k => k === 'sfx.victory').length === 1
+        && hx.afterWin.played.indexOf('sfx.defeat') === -1
+        && hx.afterWin.bgmKey === null && hx.afterWin.bgmPlaying === false
+        && hx.afterWin.bgmStopCalls[0] === 'bgm.minigame_herb', hx.afterWin);
+    check('结算当帧按住 E（浏览器连发 keydown）不会再开一局：小游戏不再被重开、角色不会被拉回起点',
+        hx.heldEBeforeSwitch.mgrPlaying === false && hx.heldEBeforeSwitch.herbRunning === false
+        && hx.heldEBeforeSwitch.scene === 'miniGame'
+        && hx.heldEBeforeSwitch.herbPos.x === 1110 && hx.heldEBeforeSwitch.herbPos.y === 344,
+        hx.heldEBeforeSwitch);
+    check('下一帧真正回主图：小游戏结算状态被 MiniGameScene.exit 清掉（currentGame=null / isFinished=false）',
+        hx.backToWorld.scene === 'gameWorld' && hx.backToWorld.mgrPlaying === false
+        && hx.backToWorld.mgrFinished === false && hx.backToWorld.currentGame === null,
+        hx.backToWorld);
+    check('回到主图后进入 0.5 秒 E 键保护期（按住的 E 不会立刻又开一局）',
+        hx.backToWorld.guard > 0.4 && hx.backToWorld.guard <= 0.5, hx.backToWorld.guard);
+    check('保护期内按 E 依旧不开局；保护期内按 WASD 走动 1 秒小游戏全程没有在跑、也没有起风 BGM',
+        hx.heldEInWorld.mgrPlaying === false && hx.heldEInWorld.herbRunning === false
+        && hx.afterWalking.mgrPlaying === false && hx.afterWalking.herbRunning === false
+        && hx.afterWalking.scene === 'gameWorld'
+        && hx.afterWalking.windBgmPlaying === false
+        && hx.afterWalking.playedAfterWin.indexOf('sfx.defeat') === -1
+        && hx.afterWalking.playedAfterWin.filter(k => k === 'sfx.victory').length === 1,
+        hx.afterWalking);
+    check('保护期过了（1 秒后计时归零）玩家主动按 E 仍能正常重开一局（失败重试流程没被堵死）',
+        hx.afterWalking.guard === 0 && hx.retryAfterGuard.mgrPlaying === true
+        && hx.retryAfterGuard.herbRunning === true, hx.retryAfterGuard);
+    check('静态守卫：小游戏自己收尾起风 BGM（_stopWindBgm 定义 + start / 风停 / complete / fail / exit 五处调用）',
+        (() => {
+            const stopAt = herbGameJs.indexOf('_stopWindBgm() {');
+            if (stopAt === -1) return false;
+            if (herbGameJs.slice(stopAt).indexOf("gameAudio.stopBgm('bgm.minigame_herb');") === -1) return false;
+            const calls = (herbGameJs.match(/this\._stopWindBgm\(\);/g) || []).length;
+            const overrides = ['complete() {', 'fail() {', 'exit() {']
+                .every(sig => herbGameJs.indexOf(sig) !== -1);
+            return calls === 5 && overrides;
+        })());
+    check('静态守卫：小游戏中忽略按键改判「场景是 miniGame」（结算到切场景那一帧也拦住）+ Main 侧三重门禁',
+        /if \(currentScene && currentScene\.sceneId === 'miniGame'\) \{\s*return;\s*\}/.test(mainJs)
+        && mainJs.indexOf('isMiniGameActive() {') !== -1
+        && mainJs.indexOf('if (this.isMiniGameActive() || this._miniGameExitGuard > 0) return;') !== -1
+        && mainJs.indexOf('if (this.isMiniGameActive()) {') !== -1
+        && mainJs.indexOf('this._miniGameExitGuard = MINI_GAME_EXIT_GUARD_SECONDS;') !== -1
+        && mainJs.indexOf('const MINI_GAME_EXIT_GUARD_SECONDS = 0.5;') !== -1
+        && /if \(this\._miniGameExitGuard > 0\) \{\s*this\._miniGameExitGuard = Math\.max\(0, this\._miniGameExitGuard - deltaTime\);/.test(mainJs)
+        && miniGameSceneJs.indexOf('this.main.miniGameManager.clearCurrentGame();') !== -1
+        && /exit\(\) \{\s*super\.exit\(\);/.test(miniGameSceneJs));
+
+    // ---- 14.8 乘风采药：胜利锁定 / 成功退出的收尾对白 / 进小游戏输入隔离 ----
+    //      对应 bug（玩家反馈）：「乘风采药胜利后会同时播放胜利和失败的音效」。
+    //      复现（2026-09-13）：赢下小游戏 →（0.5 秒保护期过后）再按一次 E 开新一局 →
+    //      主图一直按着的方向键被这一局读走 → 角色飘进虚空瓦片 → 风一停坠落判失败 →
+    //      胜利音效还没放完又响一遍失败音效。修完后四条断言全部走真实链路（见 runner 14.8）。
+    const signpostSrc = fs.readFileSync(path.join(ROOT, 'js', 'Signpost.js'), 'utf8');
+    const inputManagerSrc = fs.readFileSync(path.join(ROOT, 'js', 'InputManager.js'), 'utf8');
+    const chapter1ConfigSrc = fs.readFileSync(path.join(ROOT, 'js', 'Chapter1Config.js'), 'utf8');
+    const wl = au.herbWinLock;
+    check('乘风采药赢下之后：本局任何失败判定都被「胜利锁定」拦住（不会再有失败音效）',
+        wl.winLock.completed === true && wl.winLock.winLocked === true
+        && wl.winLock.failed === false && wl.winLock.forcedFailResult === false
+        && wl.winLock.victoryPlays === 1 && wl.winLock.defeatPlays === 0, wl.winLock);
+    check('乘风采药成功退出（回主图那一帧）后播收尾对白：主角台词，读完按 J / 点击即关闭',
+        wl.dialog.log.length === 1 && wl.dialog.log[0].speaker === '主角: '
+        && wl.dialog.log[0].text.indexOf('止风草') !== -1
+        && wl.dialog.visible === true && wl.dialog.storyActive === true
+        && wl.dialog.closedVisible === false && wl.dialog.closedStory === false, wl.dialog);
+    check('进小游戏时放掉主图按住的方向键（输入隔离）：进局那一刻 keys 里已经没有 d',
+        wl.inputIsolation.cleared === 1 && wl.inputIsolation.heldDAfterStart === false, wl.inputIsolation);
+    check('保护期过后再按 E 仍能重开一局（重试流程没被堵死），新局同样做输入隔离',
+        wl.guardAfterWalk === 0 && wl.reentry.mgrPlaying === true && wl.reentry.herbRunning === true
+        && wl.reentry.cleared === 2 && wl.reentry.heldDAfterReentryStart === false
+        && wl.reentry.pos.x === 300 && wl.reentry.pos.y === 550, wl.reentry);
+    check('重开一局后主图「按住 D」不再把小游戏角色推走：15 秒后仍站在原地、无失败音效',
+        wl.afterReentry.failed === false && wl.afterReentry.running === true
+        && wl.afterReentry.pos.x === 300 && wl.afterReentry.played.length === 0, wl.afterReentry);
+    check('重新按下 D 后小游戏照常能走（输入隔离不会把操作堵死）',
+        wl.freshPressMoves.after - wl.freshPressMoves.before > 100, wl.freshPressMoves);
+    check('静态守卫：胜利锁定状态位（MiniGame.complete 置位 + fail 直接忽略）',
+        /this\.isWinLocked = true;\s*\/\/ 胜利锁定/.test(miniGameBaseJs)
+        && /fail\(\) \{\s*if \(this\.isWinLocked \|\| this\.isCompleted\) return false;/.test(miniGameBaseJs)
+        && herbGameJs.indexOf('this.isWinLocked = true;      // 胜利锁定：本局不再接受任何失败判定') !== -1
+        && /fail\(\) \{\s*if \(this\.isWinLocked\) return false;/.test(herbGameJs)
+        && /_checkVoidFall\(\) \{\s*if \(this\.isWinLocked\) return;/.test(herbGameJs));
+    check('静态守卫：结算闸门（MiniGameManager 一局只结算一次；已胜局忽略失败再兜一层）',
+        miniGameManagerJs.indexOf("this._claimSettlement(runToken, gameId, 'success')") !== -1
+        && miniGameManagerJs.indexOf("this._claimSettlement(runToken, gameId, 'fail')") !== -1
+        && miniGameManagerJs.indexOf('if (miniGame.isWinLocked || miniGame.isCompleted) {') !== -1);
+    check('静态守卫：采药点路标带 successDialogue / successSpeaker（Signpost 读配置 + 章一配置有文本）',
+        signpostSrc.indexOf('this.successDialogue = config.successDialogue || null;') !== -1
+        && signpostSrc.indexOf('this.successSpeaker = config.successSpeaker || null;') !== -1
+        && mainJs.indexOf('playHerbCollectSuccessDialogue(signpost);') !== -1
+        && mainJs.indexOf('if (gameId === \'herb_collect\') {') !== -1
+        && chapter1ConfigSrc.indexOf('successDialogue:') !== -1
+        && chapter1ConfigSrc.indexOf('successSpeaker:') !== -1);
+    check('静态守卫：Main.startMiniGame 做输入隔离（瞬时键 + 按住键），InputManager 实现 clearHeldKeys',
+        mainJs.indexOf('this._resetInputForMiniGame();') !== -1
+        && mainJs.indexOf('this.inputManager.clearHeldKeys()') !== -1
+        && mainJs.indexOf('this.inputManager.clearFrameState()') !== -1
+        && /clearHeldKeys\(\) \{/.test(inputManagerSrc)
+        && inputManagerSrc.indexOf('if (event.repeat) {') !== -1);   // 按住不放不会把 keys 刷回来
+
+    // ---- 14.9 乘风采药：风的固定节奏（起风 3 秒 / 间隔 5 秒）+ 起风 BGM 与风同步 ----
+    //      对应第十三次改动的需求：无风不能离开陆地 / 有风可离开陆地 / 风停还在虚空即失败 /
+    //      采齐即胜利退出 + 对话框（14.8 已覆盖）/ 每次风固定 3 秒左右 / 起风间隔 5 秒 /
+    //      起风才循环播 BGM（风停与结束立即停）。探针走真实 update 链路（runner 14.9）。
+    const hw = au.herbWind;
+    check('乘风采药：风是固定节奏 —— 静风 5 秒起风、每阵风 3 秒、两阵风间隔 5 秒（16.5 秒窗口 2 阵风）',
+        hw.gusts.length === 2
+        && Math.abs(hw.gustStarts[0] - 5) <= 0.1 && Math.abs(hw.gustStarts[1] - 13) <= 0.2
+        && hw.gustSeconds.every(s => Math.abs(s - 3) <= 0.1)
+        && Math.abs(hw.calmBetweenGusts - 5) <= 0.15,
+        { gusts: hw.gusts, starts: hw.gustStarts, seconds: hw.gustSeconds, calm: hw.calmBetweenGusts });
+    check('乘风采药：16.5 秒里只有 6 秒有风（2 × 3 秒），时间线本身不会误判失败',
+        Math.abs(hw.windFramesTotal - 360) <= 2 && hw.timelineFailed === false, hw.windFramesTotal);
+    check('乘风采药：起风 BGM 与风严格同步（起风 play / 风停 stop 交替各 2 次，与阵风窗口逐一对齐）',
+        hw.bgmCalls.length === 4
+        && hw.bgmCalls[0].call === 'play' && hw.bgmCalls[1].call === 'stop'
+        && hw.bgmCalls[2].call === 'play' && hw.bgmCalls[3].call === 'stop'
+        && hw.bgmCalls.every(c => c.key === 'bgm.minigame_herb')
+        && Math.abs(hw.bgmCalls[0].at - hw.gustStarts[0]) <= 0.05
+        && Math.abs(hw.bgmCalls[2].at - hw.gustStarts[1]) <= 0.05
+        && Math.abs(hw.bgmCalls[1].at - (hw.gustStarts[0] + hw.gustSeconds[0])) <= 0.05
+        && Math.abs(hw.bgmCalls[3].at - (hw.gustStarts[1] + hw.gustSeconds[1])) <= 0.05,
+        hw.bgmCalls);
+    check('乘风采药：一个新局收尾时都会停掉起风 BGM（3 局探针开局各 1 次 + 坠落失败结算 1 次 = 4）',
+        hw.newGameStartStops === 4, hw.newGameStartStops);
+    check('乘风采药：风停时玩家还在虚空 → 判失败（碰撞盒含虚空格就算「还在虚空」）',
+        hw.fall.footprintOnLand === false && hw.fall.failed === true
+        && hw.fall.events.join(',') === 'fail', hw.fall);
+    check('乘风采药：有风时可离开陆地（虚空上照常走位，全程不判失败）',
+        hw.fly.moved > 100 && hw.fly.failed === false, hw.fly);
+    check('乘风采药：无风时不能离开陆地（陆地最右缘向虚空走 30 帧只挪了几像素就被拦住）',
+        hw.landLock.moved >= 0 && hw.landLock.moved <= 12 && hw.landLock.failed === false,
+        hw.landLock);
+    check('静态守卫：风的节奏写在常量里（3 秒 / 5 秒）且 _updateWind 不再随机、教学阶段同样推进风',
+        /const WIND_DURATION_SECONDS = 3;/.test(herbGameJs)
+        && /const WIND_INTERVAL_SECONDS = 5;/.test(herbGameJs)
+        && herbGameJs.indexOf('this.wind.duration = WIND_DURATION_SECONDS;') !== -1
+        && herbGameJs.indexOf('this.wind.cooldown = WIND_INTERVAL_SECONDS;') !== -1
+        && herbGameJs.indexOf('Math.random') === -1
+        && herbGameJs.indexOf('this._updateWind(dt);') !== -1);
+    check('静态守卫：坠落判定与走位共用同一把尺子（整块碰撞盒 _isFootprintAllOnLand）',
+        herbGameJs.indexOf('_isFootprintAllOnLand() {') !== -1
+        && herbGameJs.indexOf('if (!this._isFootprintAllOnLand()) {') !== -1);
+    check('静态守卫：认灯归魂顶部点灯顺序提示已删除（面板 / 常显开关 / 取灯序文本方法全无）',
+        lanternGameJs.indexOf('showTargetOrder') === -1
+        && lanternGameJs.indexOf('getTargetOrderText') === -1
+        && lanternGameJs.indexOf("'目标灯序：'") === -1
+        && lanternGameJs.indexOf('已隐去（凭记忆点亮）') === -1
+        && lanternGameJs.indexOf('const orderText') === -1);
+    check('静态守卫：小游戏每帧只更新一次（Main.update 不再重复驱动 MiniGameManager）',
+        mainJs.indexOf('this.updateMiniGame(deltaTime, input);') === -1
+        && mainJs.indexOf('updateMiniGame(deltaTime, input) {') === -1
+        && miniGameSceneJs.indexOf('this.main.miniGameManager.update(deltaTime, input);') !== -1);
+    check('静态守卫：M 键打开世界地图的入口已删除（Main.handleKeyDown 无 case \'m\'；InputManager 不再把 m 当游戏键）',
+        mainJs.indexOf("case 'm':") === -1
+        && mainJs.indexOf('this.mapTeleport.toggle()') === -1
+        && inputManagerSrc.indexOf("'m', 'f2'") === -1);
 
     console.log(`\n结果：通过 ${passed} 项，失败 ${failed} 项`);
     return failed === 0 ? 0 : 1;

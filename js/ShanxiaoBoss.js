@@ -203,7 +203,7 @@ class ShanxiaoBoss {
         // ========== 属性 ==========
         this.realm = this.monsterConfig.realm || 'lianqi';
         this.maxHealth = config.maxHealth || this.monsterConfig.health || 300;
-        this.maxHealth = 1;//调试阶段写1，后续要删除
+        //this.maxHealth = 1;//调试阶段写1，后续要删除
         this.health = this.maxHealth;
         this.damage = config.damage || this.monsterConfig.damage || 20;
         this.defense = config.defense || this.monsterConfig.defense || 5;
@@ -997,6 +997,8 @@ class ShanxiaoBoss {
         }
 
         this.playAnimation('sweep', false);
+        // 横扫音效：与横扫动画同一时刻（见 tools/音频资源清单.txt）
+        this._playSfx('sfx.boss_shanxiao_sweep');
     }
 
     /**
@@ -1027,6 +1029,8 @@ class ShanxiaoBoss {
         }
 
         this.playAnimation('charge', false);
+        // 蓄力音效：与蓄力动画同一时刻
+        this._playSfx('sfx.boss_shanxiao_charge');
 
         // 风旋特效：跟随 Boss 身体，绘制在 Boss 之上（循环播放，直至蓄力结束或被中断）
         this.stopChargeWind();
@@ -1090,6 +1094,8 @@ class ShanxiaoBoss {
         );
 
         this.playAnimation('pounce', false);
+        // 扑击音效：与扑击动画同一时刻（落地时另有砸地音效，见 updatePounce）
+        this._playSfx('sfx.boss_shanxiao_pounce');
     }
 
     /**
@@ -1105,12 +1111,14 @@ class ShanxiaoBoss {
             this.tryMove(0, this.pounceSign * step);
         }
 
-        // 落地帧：扬尘特效 + 圆形范围伤害
+        // 落地帧：扬尘特效 + 砸地音效 + 圆形范围伤害
         if (!this.hitFrameApplied && this.getCurrentAnimationFrame() >= this.tuning.pounceHitFrame) {
             this.hitFrameApplied = true;
             this.spawnEffect('boss_pounce_dust', {
                 position: { x: this.position.x, y: this.position.y + ShanxiaoBoss.FRAME_SIZE * this.tuning.scale / 2 - 12 },
             });
+            // 砸地音效：与落地扬尘特效同一时刻
+            this._playSfx('sfx.boss_shanxiao_slam');
             this.dealCircleDamage(this.tuning.pounceRadius);
         }
 
@@ -1176,6 +1184,9 @@ class ShanxiaoBoss {
         this.changeAction('dead', 0);
         this.playAnimation('dead', false);
 
+        // 战败音效：与战败动画同一时刻
+        this._playSfx('sfx.boss_shanxiao_defeat');
+
         console.log('[摄风山魈] 战败');
     }
 
@@ -1201,6 +1212,27 @@ class ShanxiaoBoss {
     }
 
     // ==================== 伤害结算 ====================
+
+    // ==================== 音效 ====================
+
+    /**
+     * 播放一次音效（缺失音频文件时静默跳过，不影响战斗逻辑）
+     * 音频键 / 文件路径见 js/ResourceManager.js，触发时机见 tools/音频资源清单.txt
+     * @param {string} key
+     * @returns {boolean}
+     */
+    _playSfx(key) {
+        return gameAudio.playSfx(key);
+    }
+
+    /**
+     * 播放一次音效，但「同一音效正在播放时跳过这一次」（受伤音效用）
+     * @param {string} key
+     * @returns {boolean}
+     */
+    _playSfxExclusive(key) {
+        return gameAudio.playSfxExclusive(key);
+    }
 
     /**
      * 受到伤害
@@ -1228,9 +1260,13 @@ class ShanxiaoBoss {
         }
 
         if (this.health <= 0) {
+            // 这一击致命 → 由 enterDead 播战败音效（与战败动画同步，不再叠受伤音效）
             this.enterDead();
             return true;
         }
+
+        // 受伤音效：每次受伤都播；受伤音效正在播放时这一次不播（不叠加）
+        this._playSfxExclusive('sfx.boss_shanxiao_hurt');
 
         // 打断规则
         if (this.action === 'pounce') {

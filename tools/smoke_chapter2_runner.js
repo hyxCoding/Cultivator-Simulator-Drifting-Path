@@ -5,6 +5,14 @@
  */
 (async function () {
     const R = {};
+    // 音频节流时钟：AudioManager 现在对「同一种音效」设了最小间隔（SFX_MIN_INTERVAL = 0.2 秒，
+    // 防同一帧被播两次 / 连点重复出声）。冒烟测试里所有帧、所有点击都在同一瞬间跑完，
+    // 若用真实时钟，第二次起的同类音效都会被节流掉，既有断言（例如音效池上限）就测不到了 ——
+    // 这里注入一个「每次取时间 +1 秒」的时钟，让重复播放永远被时间隔开；
+    // 节流规则本身在 14.2 用固定时钟单独验证（见 R.audio.play.throttle*）。
+    let audioClockMs = 0;
+    AudioManager.prototype._now = function () { audioClockMs += 1000; return audioClockMs; };
+
     const gameConfig = GameConfig.getInstance();
     chapterLoader.registerChapter(Chapter1Config.getAll());
     chapterLoader.registerChapter(Chapter2Config.getAll());
@@ -24,9 +32,11 @@
         next: CHAIN.map(id => (gameConfig.getQuest(id) || {}).nextQuest),
         orders: CHAIN.map(id => (gameConfig.getQuest(id) || {}).order),
         objectives: CHAIN.map(id => (gameConfig.getQuest(id) || {}).objectives || []),
-        rewards: CHAIN.map(id => (gameConfig.getQuest(id) || {}).rewards || {}),
-        lingShiMain3: ['chapter2_main_1', 'chapter2_main_2', 'chapter2_main_3']
-            .reduce((s, id) => s + ((gameConfig.getQuest(id).rewards || {}).lingShi || 0), 0),
+        // 新平衡：任务不再发奖 → 每条任务的 rewards 字段应已移除（rewardKeys 全为 0）
+        rewardKeys: CHAIN.map(id => {
+            const quest = gameConfig.getQuest(id) || {};
+            return quest.rewards ? Object.keys(quest.rewards).length : 0;
+        }),
     };
 
     // ---- 严格顺序：前置未完成不能接取；目标不能跳步 ----
@@ -567,6 +577,44 @@
         noWin: guardNoWin,
     };
 
+    // ---- 回归：第一章章末舞台恢复（applyChapterEndStage）不得作用于云渡泽 ----
+    //   同一个根因下的两个真机 bug（本用例守住它们不再复发）：
+    //     ① 进云渡泽时照样跑第一章章末恢复 → 阿禾被 reposition 到**第一章码头瓦片 (81,44)**
+    //        （云渡泽里 = 世界 2592,1408），玩家看到的就是“阿禾还停在第一章”；
+    //     ② 同一次调用里 createDepartSignpost 用云渡泽的 chapterEnd.departSignpost 生成了
+    //        一个**无任务门控**的第一章登船路标 → 刚打完第一章进图，泊位就冒出
+    //        「登船前往照尘仙城」，且按 E 走的是第一章的 boardShipAndOpenWorldMap。
+    //   这里用“刚打完第一章、带着 farewell 标记”的真实存档状态跑真实代码路径。
+    const chapterEndStageSavedSystem = main.player.questSystem;
+    const chapterEndStageSystem = chapter1Done();
+    chapterEndStageSystem.setStoryFlag('chapter1_farewell_done', true);
+    main.player.questSystem = chapterEndStageSystem;
+    const aheInYunduze = yunMap.npcs.get('ahe');
+    const aheBeforeStage = aheInYunduze ? { x: aheInYunduze.position.x, y: aheInYunduze.position.y } : null;
+    const signpostCountBeforeStage = yunMap.signposts.size;
+    main.applyChapterEndStage(yunMap);                       // 真实代码路径：切图 / 读档后的舞台恢复
+    R.gates.chapterEndStageGuard = {
+        mapId: yunMap.mapId,
+        mapChapter: yunMap.mapConfig.chapter,
+        hasIsChapter1Map: typeof main.isChapter1Map === 'function',
+        isChapter1Map: main.isChapter1Map(yunMap),           // 云渡泽 → 应为 false
+        isChapter2Map: main.isChapter2Map(yunMap.mapId),
+        farewellFlag: chapterEndStageSystem.hasStoryFlag('chapter1_farewell_done'),
+        // 第一章码头告别位（瓦片 81,44）：若被误用到云渡泽，阿禾会跑到世界 (2592,1408)
+        ch1QuayTile: (Chapter1Config.getMapConfigs().qinglan_fuye.chapterEnd || {}).aheQuayTile || null,
+        aheBefore: aheBeforeStage,
+        aheAfter: aheInYunduze ? { x: aheInYunduze.position.x, y: aheInYunduze.position.y } : null,
+        aheMoved: !!(aheBeforeStage && aheInYunduze
+            && (aheInYunduze.position.x !== aheBeforeStage.x || aheInYunduze.position.y !== aheBeforeStage.y)),
+        signpostsBefore: signpostCountBeforeStage,
+        signpostsAfter: yunMap.signposts.size,
+        boatSignpostOnMap: yunMap.signposts.has('signpost_zhaochen_boat'),
+    };
+    // 反向再确认：防呆判断也让 createDepartSignpost 在云渡泽直接返回 null（不建路标）
+    R.gates.chapterEndStageGuard.createDepartSignpostReturnedNull = main.createDepartSignpost(yunMap) === null;
+    R.gates.chapterEndStageGuard.signpostsAfterGuardCall = yunMap.signposts.size;
+    main.player.questSystem = chapterEndStageSavedSystem;
+
     // ---- 门控：泊位登船路标（代码动态生成 + 目标门控）----
     main.player.questSystem = gate2;
     const boatSign = main.ensureChapter2BoatSignpost();
@@ -718,8 +766,10 @@
         afterReleasePress: eHoldAfterReleasePress,
     };
 
-    // ⑤ 同帧被更新两次的回归（真实帧循环：MiniGameScene.update + Main.updateMiniGame 各一次，
-    //    pressedKeys 到帧末才清）→ 同一份 pressedKeys 不能让第 4 盏灯被二次点亮
+    // ⑤ 同一份 pressedKeys 连喂两帧的防御性回归（历史上小游戏曾被 MiniGameScene.update 与
+    //    Main.updateMiniGame 各驱动一次，pressedKeys 到帧末才清）→ 第 4 盏灯不能被二次点亮。
+    //    注：第十三次改动已让 Main.update 不再重复驱动小游戏（每帧只更新一次），
+    //    这里保留「被重复驱动也不出错」的行为守卫。
     const sameFrameGame = new LanternIdentifyMiniGame();
     sameFrameGame.start();
     const sameFrameWrong = sameFrameGame.targetOrder.slice();
@@ -1240,6 +1290,102 @@
         cooldown: Math.round(dueBoss.cooldowns.control),
     };
 
+    // 禁键期间「键盘 / 技能零反应」：音效（sfx.ui_quest_panel / 各技能音效）不能离开行为单独出现。
+    //   走真实入口：InputManager.handleKeyDown →（Main.bindInputEvents 挂的 onKeyDown）→ Main.handleKeyDown；
+    //   技能侧再把同一份 getInputState() 喂给 PlayerCombatSystem.update（技能音效就在 try* 内部、校验之后）。
+    //   下面「解锁对照」用同一套按键再跑一遍 —— 确认 ① 不是「本来就不会响」的空转。
+    const lockProbeSaved = {
+        sceneManager: main.sceneManager,
+        questUI: main.questUI,
+        mapTeleport: main.mapTeleport,
+        unlocked: main.playerCombat.isUnlocked(),
+        onKeyDown: main.inputManager.onKeyDown,
+        playSfx: gameAudio.playSfx,
+    };
+    const lockProbeSfx = [];
+    gameAudio.playSfx = function (key) { lockProbeSfx.push(key); return false; };
+
+    const lockProbeSkills = [];
+    ['tryAttack', 'tryCastLingxidan', 'tryHutishu', 'tryDodge', 'tryCastJianying'].forEach(fn => {
+        const orig = main.playerCombat[fn].bind(main.playerCombat);
+        // 记录「这个技能键有没有被捕获 / 施展成功」：只在真的走到 try* 里才会出现（音效就在里面）
+        main.playerCombat[fn] = function () {
+            const ok = orig();
+            lockProbeSkills.push(fn + '=' + (ok === false ? 'false' : 'true'));
+            return ok;
+        };
+    });
+
+    const probeKeys = ['q', 'j', 'u', 'i', 'o', 'l'];
+    function probePressKeys() {
+        const rows = [];
+        probeKeys.forEach(key => {
+            // 每个键都从「任务栏关着 + 灵息/冷却就绪」开始，按键之间互不干扰
+            main.questUI.isVisible = false;
+            main.playerCombat.hurtLock = 0;
+            main.playerCombat.casting = null;
+            Object.keys(main.playerCombat.cooldowns).forEach(k => { main.playerCombat.cooldowns[k] = 0; });
+            main.player.playerData.mana = main.player.playerData.maxMana || 100;
+            lockProbeSfx.length = 0;
+            lockProbeSkills.length = 0;
+
+            main.inputManager.handleKeyDown({ key: key, repeat: false, preventDefault() {} });
+            main.playerCombat.update(1 / 60, main.inputManager.getInputState());
+            main.inputManager.clearFrameState();
+            main.inputManager.handleKeyUp({ key: key, preventDefault() {} });
+            main.inputManager.clearFrameState();
+
+            rows.push({
+                key: key,
+                sfx: lockProbeSfx.slice(),
+                skills: lockProbeSkills.slice(),
+                questUIVisible: main.questUI.isVisible === true,
+            });
+        });
+        return rows;
+    }
+
+    main.sceneManager = { getCurrentScene: () => ({ sceneId: 'gameWorld' }) };
+    main.inputManager.onKeyDown = (key, event) => main.handleKeyDown(key, event);
+    main.playerCombat.setUnlocked(true);
+    main.player.isAlive = true;
+    main.player.isInteracting = false;
+    main.storyDialogueActive = false;
+    main.isFoundationTrialPlaying = false;
+    main.isCoreTrialPlaying = false;
+    main.dialogBox.isVisible = false;
+    main.questUI = { isVisible: false, update() {} };
+    main.questUI.show = function () { QuestUI.prototype.show.call(this); };
+    main.questUI.hide = function () { QuestUI.prototype.hide.call(this); };
+    main.questUI.toggle = function () { QuestUI.prototype.toggle.call(this); };
+    main.mapTeleport = { isVisible: false, update() {}, show() {}, hide() {} };
+
+    // ① 锁定中（与渡厄使「控制」同一状态）
+    const lockedRows = probePressKeys();
+    const lockedCanCapture = main.playerCombat._canCaptureInput(main.inputManager.getInputState());
+    const lockedStillBlocked = main.inputManager.isInputBlocked() === true;
+
+    // ② 对照：解除封锁（其它状态一字不改）→ 同样的按键就该开任务栏 / 出招 / 响音效
+    main.inputManager.setInputBlocked(false);
+    const unlockedRows = probePressKeys();
+    const unlockedCanCapture = main.playerCombat._canCaptureInput(main.inputManager.getInputState());
+
+    R.boss.control.keyProbe = {
+        keys: probeKeys.join(','),
+        locked: { blocked: lockedStillBlocked, canCapture: lockedCanCapture, rows: lockedRows },
+        unlocked: { canCapture: unlockedCanCapture, rows: unlockedRows },
+    };
+
+    // 还原现场：后续断言继续用真实的 questUI / sceneManager / 音效入口
+    main.inputManager.setInputBlocked(true);
+    if (lockProbeSaved.questUI) lockProbeSaved.questUI.isVisible = false;
+    main.questUI = lockProbeSaved.questUI;
+    main.sceneManager = lockProbeSaved.sceneManager;
+    main.mapTeleport = lockProbeSaved.mapTeleport;
+    main.playerCombat.setUnlocked(lockProbeSaved.unlocked);
+    main.inputManager.onKeyDown = lockProbeSaved.onKeyDown;
+    gameAudio.playSfx = lockProbeSaved.playSfx;
+
     for (let i = 0; i < 80; i++) main.updateBossArenaControlLock(0.05);
     R.boss.control.released = main.inputManager.inputBlocked === false
         && main.playerCombat.isControlChainActive() === false;
@@ -1262,15 +1408,29 @@
         minionsInMap: Array.from(arenaMap.monsters.values()).filter(m => m instanceof DueMinion).length,
     };
 
-    // ---- 奖励结算 ----
+    // ---- 奖励 / 战败成长结算 ----
+    // 新平衡：任务不再发奖（rewards 字段已全部移除），角色成长只来自两处：
+    //   ① 境界基准（GameConfig.realms）：练气 150/70 → 筑基 400/250 → 结丹 1000/500
+    //   ② Boss 战败成长（arenaDefeatBonus）：摄风山魈 +20/+10、渡厄使 +35/+20，各上限 5 次
+    const questIds = ['chapter2_main_1', 'chapter2_main_2', 'chapter2_main_3',
+        'chapter2_main_4', 'chapter2_ending_1', 'chapter2_ending_2'];
     const before = {
         lingShi: main.player.playerData.lingShi,
         maxHealth: main.player.playerData.maxHealth,
         maxMana: main.player.playerData.maxMana,
         health: main.player.playerData.health,
+        professionSkillPoints: main.player.playerData.professionSkillPoints,
+        huiyuanDan: main.player.inventory.getItemCount('huiyuan_dan'),
+        huilingDan: main.player.inventory.getItemCount('huiling_dan'),
     };
-    main.applyQuestRewards('chapter2_main_2', gameConfig.getQuest('chapter2_main_2').rewards);
+    // 空 rewards 发奖：数值完全不变（applyQuestRewards 直接返回）
+    const main2Quest = gameConfig.getQuest('chapter2_main_2') || {};
+    main.applyQuestRewards('chapter2_main_2', main2Quest.rewards);
     R.rewards = {
+        questRewardKeys: questIds.map(id => {
+            const quest = gameConfig.getQuest(id) || {};
+            return quest.rewards ? Object.keys(quest.rewards).length : 0;
+        }),
         before: before,
         after: {
             lingShi: main.player.playerData.lingShi,
@@ -1282,7 +1442,9 @@
         huiyuanDan: main.player.inventory.getItemCount('huiyuan_dan'),
         huilingDan: main.player.inventory.getItemCount('huiling_dan'),
     };
-    main.applyQuestRewards('chapter2_ending_1', gameConfig.getQuest('chapter2_ending_1').rewards);
+
+    // 结丹境界基准（尚无战败成长）：气血 1000 / 灵息 500 并回满（Main.applyRealmStats）
+    main.applyRealmStats('jiedan');
     R.rewards.realm = main.player.playerData.realm;
     R.rewards.maxHealth = main.player.playerData.maxHealth;
     R.rewards.maxMana = main.player.playerData.maxMana;
@@ -1291,6 +1453,54 @@
     // 章末一不再发放技能 / 不再解锁照尘仙城（剑影连斩改由主线一试炼传授）
     R.rewards.jianying = main.player.professionSystem.getSkillLevel('jianying');
     R.rewards.zhaochenFlag = main.player.questSystem.hasStoryFlag('map_unlocked_zhaochen_xiancheng');
+
+    // 渡厄使战败成长：以筑基基准 400/250 起算，每次 +35 气血 / +20 灵息上限，最多 5 次
+    main.applyRealmStats('zhuji');
+    const dueFailures = [];
+    for (let i = 1; i <= 6; i++) {
+        const applied = main.applyBossFailureBonus({
+            mapId: 'boss_arena_ch2',
+            defeatFlag: 'due_boss_defeated',
+            defeatBonus: { id: 'boss_due', maxHealth: 35, maxMana: 20, maxFailures: 5 },
+        });
+        dueFailures.push({
+            applied: applied,
+            times: (main.player.playerData.bossFailures || {}).boss_due || 0,
+            maxHealth: main.player.playerData.maxHealth,
+            maxMana: main.player.playerData.maxMana,
+        });
+    }
+    R.rewards.dueFailures = dueFailures;
+    R.rewards.dueBonus = {
+        maxHealthBonus: main.player.playerData.maxHealthBonus,
+        maxManaBonus: main.player.playerData.maxManaBonus,
+    };
+    // 晋级结丹后累计加成继续生效：1000 + 175 / 500 + 100
+    main.applyRealmStats('jiedan');
+    R.rewards.realmWithBonus = {
+        maxHealth: main.player.playerData.maxHealth,
+        maxMana: main.player.playerData.maxMana,
+        health: main.player.playerData.health,
+        mana: main.player.playerData.mana,
+    };
+    // 摄风山魈战败成长（第一章 +20/+10）：同一套结算，独立计数
+    main.applyRealmStats('lianqi');
+    const shanxiaoApplied = main.applyBossFailureBonus({
+        mapId: 'boss_arena_ch1',
+        defeatFlag: 'boss_shanxiao_defeated',
+        defeatBonus: { id: 'boss_shanxiao', maxHealth: 20, maxMana: 10, maxFailures: 5 },
+    });
+    R.rewards.shanxiao = {
+        applied: shanxiaoApplied,
+        maxHealth: main.player.playerData.maxHealth,
+        maxMana: main.player.playerData.maxMana,
+    };
+
+    // 探针结束：清空战败成长状态（真实存档里这些值随存档保留），避免影响后续小节
+    main.player.playerData.bossFailures = {};
+    main.player.playerData.maxHealthBonus = 0;
+    main.player.playerData.maxManaBonus = 0;
+
     main.player.playerData.realm = 'zhuji';
     main.player.playerData.stage = '初期';
     main.ensureFoundationPerfect();
@@ -1676,6 +1886,1082 @@
         missing: keys.filter(k => !rm.getImagePath(k)),
         bossArenaCh2: rm.getResourceGroup('bossArenaCh2').images.length,
     };
+
+    // ---- 飘落物（落叶 / 落花）：只在前两章主图 + 开始界面 / 完结界面显示 ----
+    //      数量上限可调（maxCount）、轨迹不是直线、12 帧循环、飘出边界即回收
+    R.foliage = (() => {
+        const ch1Maps = Chapter1Config.getMapConfigs();
+        const built = {
+            qinglan_fuye: new GameMap('qinglan_fuye', ch1Maps.qinglan_fuye,
+                { backgroundImage: null, collisionImage: null }),
+            yunduze: new GameMap('yunduze', C2_MAP.yunduze,
+                { backgroundImage: null, collisionImage: null }),
+            boss_arena_ch1: new GameMap('boss_arena_ch1', ch1Maps.boss_arena_ch1,
+                { backgroundImage: null, collisionImage: null }),
+            boss_arena_ch2: new GameMap('boss_arena_ch2', C2_MAP.boss_arena_ch2,
+                { backgroundImage: null, collisionImage: null }),
+        };
+        Object.keys(built).forEach(id => built[id].init());
+
+        const enabled = {};
+        const maxCount = {};
+        const hasInstance = {};
+        Object.keys(built).forEach(id => {
+            const map = built[id];
+            hasInstance[id] = !!map.foliage;
+            enabled[id] = !!(map.foliage && map.foliage.isEnabled());
+            maxCount[id] = map.ambientConfig.fallingFoliage.maxCount;
+        });
+
+        // 活动范围 = 摄像机视口（有摄像机）/ 整张地图（无摄像机）
+        const yun = built.yunduze;
+        const fakeCamera = { width: 1280, height: 720, getRenderPosition: () => ({ x: 300, y: 200 }) };
+        const areaWithCamera = yun.getFoliageArea(fakeCamera);
+        const areaWithoutCamera = yun.getFoliageArea(null);
+
+        // 数量上限：maxCount 调成 3 → 连跑 10 秒峰值也不超过 3
+        const probe = yun.foliage;
+        probe.setArea({ x: 0, y: 0, width: 1280, height: 720 });
+        probe.applyConfig({ enabled: true, maxCount: 3, spawnRate: 60 });
+        probe.reset();
+        let peak = 0;
+        for (let i = 0; i < 600; i++) {
+            probe.update(1 / 60);
+            peak = Math.max(peak, probe.getCount());
+        }
+        const cappedConfig = probe.config.maxCount;
+
+        // 轨迹：固定参数后横向必须左右往复（不是直线），竖向一直在下落
+        const solo = new FallingFoliage({ area: { x: 0, y: 0, width: 1000, height: 1000 }, maxCount: 0 });
+        const p = solo.spawn();
+        p.drift = 0; p.swaySpeed = 40; p.swayFrequency = 0.5; p.swayPhase = 0;
+        p.vy = 30; p.gravity = 0; p.spinAmplitude = 0; p.spinFrequency = 0; p.spinPhase = 0;
+        p.baseAlpha = 1; p.age = 0; p.frameTimer = 0; p.frameIndex = 0;
+        solo.particles = [p];
+        const xs = [];
+        const frameSeen = {};
+        let descending = true;
+        let lastY = p.y;
+        // 跑 2 秒（120 帧）：摆动频率 0.5Hz → 正弦在 [0,2s] 内正负交替（能看出左右往复）
+        for (let i = 0; i < 120; i++) {
+            solo.update(1 / 60);
+            xs.push(p.x);
+            if (p.y <= lastY) descending = false;
+            lastY = p.y;
+            frameSeen[p.frameIndex] = true;
+        }
+        const dx = xs.slice(1).map((x, idx) => x - xs[idx]);
+        const trail = {
+            wentLeft: dx.filter(d => d < -1e-9).length,
+            wentRight: dx.filter(d => d > 1e-9).length,
+            xMonotonic: dx.every(d => d >= -1e-9) || dx.every(d => d <= 1e-9),
+            descending: descending,
+            frameCount: Object.keys(frameSeen).length,
+            frameIndexAfter2s: p.frameIndex,
+        };
+
+        // 回收：沉到下边界之外即被移除
+        p.y = 100000;
+        solo.update(1 / 60);
+        const recycled = solo.getCount() === 0;
+
+        // 关闭开关：enabled = false → 清空且不再生成
+        probe.applyConfig({ enabled: false, maxCount: 10, spawnRate: 60 });
+        probe.update(1 / 60);
+        const disabledCount = probe.getCount();
+        probe.setEnabled(true);
+
+        return {
+            spriteKeys: FallingFoliage.SPRITE_SPECS.map(s => s.key),
+            mapWhitelist: FallingFoliage.FOLIAGE_MAP_IDS.join(','),
+            frameSpec: {
+                frameWidth: FallingFoliage.DEFAULT_CONFIG.frameWidth,
+                frameHeight: FallingFoliage.DEFAULT_CONFIG.frameHeight,
+                frameCount: FallingFoliage.DEFAULT_CONFIG.frameCount,
+                fps: FallingFoliage.DEFAULT_CONFIG.fps,
+            },
+            resourcePaths: {
+                leaf: rm.getImagePath('foliage.falling_leaf'),
+                flower: rm.getImagePath('foliage.falling_flower'),
+                group: rm.getResourceGroupImagePaths('foliage'),
+            },
+            mapChecks: { enabled: enabled, hasInstance: hasInstance, maxCount: maxCount },
+            areaWithCamera: areaWithCamera,
+            areaWithoutCamera: areaWithoutCamera,
+            cappedPeak: peak,
+            cappedConfig: cappedConfig,
+            trail: trail,
+            recycled: recycled,
+            disabledCount: disabledCount,
+        };
+    })();
+    // ---- 14) 音频：背景音乐（循环）+ 音效（单次）----
+    //     资源登记 / 播放行为 / 回主图 10 秒倒计时（重复调度重新计时）/ 进小游戏·Boss 关立即停 /
+    //     受伤音效不叠加 / 缺失音频文件不报错（见 tools/音频资源清单.txt）
+    R.audio = {};
+    {
+        const rm = ResourceManager.getInstance();
+
+        // 14.1 资源登记：键 → 文件路径 + 资源分组
+        const bgmKeys = ['bgm.main_menu', 'bgm.qinglan', 'bgm.yunduze',
+            'bgm.minigame_boat', 'bgm.minigame_herb', 'bgm.ending'];
+        const sfxKeys = [
+            'sfx.player_attack', 'sfx.player_lingxidan', 'sfx.player_hutishu',
+            'sfx.player_dodge', 'sfx.player_jianying', 'sfx.player_hurt', 'sfx.pickup',
+            'sfx.boss_shanxiao_charge', 'sfx.boss_shanxiao_sweep', 'sfx.boss_shanxiao_pounce',
+            'sfx.boss_shanxiao_slam', 'sfx.boss_shanxiao_hurt', 'sfx.boss_shanxiao_defeat',
+            'sfx.boss_due_summon', 'sfx.boss_due_dash', 'sfx.boss_due_control',
+            'sfx.boss_due_hurt', 'sfx.boss_due_defeat',
+            'sfx.ui_hover', 'sfx.ui_click', 'sfx.ui_quest_panel',
+            'sfx.minigame_lantern_light', 'sfx.minigame_lantern_extinguish',
+            'sfx.victory', 'sfx.defeat',
+        ];
+        const paths = {};
+        bgmKeys.concat(sfxKeys).forEach(key => { paths[key] = rm.getAudioPath(key); });
+        R.audio.keys = { bgmCount: bgmKeys.length, sfxCount: sfxKeys.length, paths: paths };
+        R.audio.groups = {
+            mainMenu: rm.getResourceGroup('mainMenu').audio.join(','),
+            ending: rm.getResourceGroup('ending').audio.join(','),
+            playerCombat: rm.getResourceGroup('playerCombat').audio.join(','),
+            bossArena: rm.getResourceGroup('bossArena').audio.join(','),
+            bossArenaCh2: rm.getResourceGroup('bossArenaCh2').audio.join(','),
+        };
+        R.audio.statics = {
+            mapBgm: AudioManager.MAP_BGM,
+            minigameBgm: AudioManager.MINIGAME_BGM,
+            returnDelay: AudioManager.MAP_BGM_RETURN_DELAY,
+            poolSize: AudioManager.SFX_POOL_SIZE,
+            sfxMinInterval: AudioManager.SFX_MIN_INTERVAL,
+            mapBgmQinglan: AudioManager.getMapBgmKey('qinglan_fuye'),
+            mapBgmYunduze: AudioManager.getMapBgmKey('yunduze'),
+            mapBgmArena: AudioManager.getMapBgmKey('boss_arena_ch1'),
+            boatBgm: AudioManager.getMinigameBgmKey('boat_navigation'),
+            herbBgm: AudioManager.getMinigameBgmKey('herb_collect'),
+            lanternBgm: AudioManager.getMinigameBgmKey('lantern_identify'),
+            isMapBgm: AudioManager.isMapBgm('bgm.qinglan'),
+            isMapBgmEnding: AudioManager.isMapBgm('bgm.ending'),
+        };
+    }
+
+    // 14.2 播放行为：用可观测的 Audio 桩替换环境里的桩（play / pause 会记录状态）
+    {
+        const manager = AudioManager.getInstance();
+        const originalAudio = globalThis.Audio;
+        const created = [];
+        globalThis.Audio = class {
+            constructor() {
+                this.loop = false;
+                this.volume = 1;
+                this.currentTime = 0;
+                this.src = '';
+                this._playing = false;
+                created.push(this);
+            }
+            get paused() { return !this._playing; }
+            play() { this._playing = true; return Promise.resolve(); }
+            pause() { this._playing = false; }
+            addEventListener() {}
+        };
+
+        manager.stopAll();
+        manager._bgmCache.clear();
+        manager._sfxCache.clear();
+        manager._pathCache.clear();
+
+        // 音效：单次播放（不循环）、可叠加（池上限 4）、受伤音效互斥
+        const sfxStarted = manager.playSfx('sfx.player_attack');
+        const sfxAudio = created[created.length - 1];
+        const sfxLoop = sfxAudio.loop;
+        const sfxPlaying = manager.isSfxPlaying('sfx.player_attack');
+        const exclusiveWhilePlaying = manager.playSfxExclusive('sfx.player_attack');
+        sfxAudio.pause();
+        const exclusiveAfterStop = manager.playSfxExclusive('sfx.player_attack');
+
+        // 同种音效节流（需求：同一音效 0.2 秒内不重复播放）——用固定时钟精确验证边界
+        const throttleClock = { t: 0 };
+        manager._now = () => throttleClock.t;
+        const throttleFirst = manager.playSfx('sfx.ui_click');            // true：首次
+        const throttleRepeat = manager.playSfx('sfx.ui_click');           // false：同一瞬间重复
+        throttleClock.t += 199;
+        const throttleBeforeWindow = manager.playSfx('sfx.ui_click');     // false：0.199 秒 < 0.2
+        throttleClock.t += 2;
+        const throttleAfterWindow = manager.playSfx('sfx.ui_click');      // true：0.201 秒 ≥ 0.2
+        const throttleOtherKey = manager.playSfx('sfx.ui_hover');         // true：别的键不受影响
+        // 换回「每次 +1 秒」的时钟：后面重复播放不再被节流（用来验证池上限）
+        manager._now = function () { audioClockMs += 1000; return audioClockMs; };
+
+        for (let i = 0; i < 6; i++) manager.playSfx('sfx.ui_click');
+        const uiEntry = manager._sfxCache.get('sfx.ui_click');
+
+        // 背景音乐：循环（loop = true）、同一首不重头播
+        const bgmStarted = manager.playBgm('bgm.qinglan');
+        const bgmAudio = created[created.length - 1];
+        const bgmLoop = bgmAudio.loop;
+        const bgmKeyAfterPlay = manager.currentBgmKey;
+        const bgmPlaying = manager.isBgmPlaying();
+        manager.playBgm('bgm.qinglan');
+        const bgmElementKept = manager.bgmElement === bgmAudio && manager._bgmCache.size === 1;
+
+        // 换图：立即停当前 + 10 秒倒计时；重复调度重新计时
+        const scheduled = manager.scheduleBgm('bgm.yunduze');
+        const afterSchedule = {
+            current: manager.currentBgmKey,
+            scheduled: manager.getScheduledBgmKey(),
+            timer: manager.getScheduledBgmRemaining(),
+        };
+        manager.update(9);
+        const timerAfter9 = manager.getScheduledBgmRemaining();
+        manager.scheduleBgm('bgm.yunduze');
+        const timerAfterReschedule = manager.getScheduledBgmRemaining();
+        manager.update(10.2);
+        const playedAfterDelay = manager.currentBgmKey;
+
+        // 只停指定键：含当前键 → 停；不含当前键 → 原样保留（回主图延迟 / 小游戏收尾用）
+        manager.playBgm('bgm.ending');
+        const stopOtherKeys = manager.stopBgm(['bgm.qinglan', 'bgm.yunduze']);
+        const endingKept = manager.currentBgmKey;
+        manager.playBgm('bgm.qinglan');
+        const stopMapKeys = manager.stopBgm(['bgm.qinglan', 'bgm.yunduze']);
+        const mapStopped = manager.currentBgmKey;
+
+        // 缺文件 / 解码失败：标记不可用、之后不再尝试，且不抛错
+        const rejectStub = {
+            currentTime: 0, volume: 1, paused: true, src: '',
+            play() { return Promise.reject(Object.assign(new Error('decode'), { name: 'NotSupportedError' })); },
+            pause() {},
+        };
+        manager._pathCache.set('sfx.__decode_fail__', 'assets/audio/sfx/__decode_fail__.mp3');
+        manager._sfxCache.set('sfx.__decode_fail__', {
+            audios: [rejectStub], next: 0, failed: false, path: 'assets/audio/sfx/__decode_fail__.mp3',
+        });
+        const failStarted = manager.playSfx('sfx.__decode_fail__');
+        for (let i = 0; i < 3; i++) await Promise.resolve();
+        const failMarked = manager._sfxCache.get('sfx.__decode_fail__').failed === true;
+        const failRetry = manager.playSfx('sfx.__decode_fail__');
+        const unknownSfxKey = manager.playSfx('sfx.__not_registered__');
+        const unknownBgmKey = manager.playBgm('bgm.__not_registered__');
+
+        manager._sfxCache.delete('sfx.__decode_fail__');
+        manager._pathCache.delete('sfx.__decode_fail__');
+        globalThis.Audio = originalAudio;
+        manager.stopAll();
+        manager._bgmCache.clear();
+        manager._sfxCache.clear();
+        manager._pathCache.clear();
+
+        R.audio.play = {
+            sfxStarted, sfxLoop, sfxPlaying, exclusiveWhilePlaying, exclusiveAfterStop,
+            throttleFirst, throttleRepeat, throttleBeforeWindow, throttleAfterWindow, throttleOtherKey,
+            uiPoolSize: uiEntry.audios.length, uiLoop: uiEntry.audios[0].loop,
+            bgmStarted, bgmLoop, bgmKeyAfterPlay, bgmPlaying, bgmElementKept,
+            scheduled, afterSchedule, timerAfter9, timerAfterReschedule, playedAfterDelay,
+            stopOtherKeys, endingKept, stopMapKeys, mapStopped,
+            failStarted, failMarked, failRetry, unknownSfxKey, unknownBgmKey,
+        };
+    }
+
+    // 14.3 Main 侧背景音乐调度：首次进入立即播 / 离开立即停 / 回主图 10 秒 / 进战场立即停
+    {
+        const manager = AudioManager.getInstance();
+        main.audioManager = manager;
+        main.currentMap = { mapId: 'qinglan_fuye' };
+        main.hasEnteredGameWorld = false;
+        manager.stopAll();
+        manager._bgmCache.clear();
+        manager._sfxCache.clear();
+        manager._pathCache.clear();
+
+        main.onGameWorldSceneEnter();                       // 首次（从开始界面进来）→ 立即播
+        const firstEntryKey = manager.currentBgmKey;
+        const firstEntryScheduled = manager.getScheduledBgmKey();
+
+        main.onGameWorldSceneExit();                        // 离开大地图 → 主图 BGM 立即停
+        const afterExitKey = manager.currentBgmKey;
+
+        main.onGameWorldSceneEnter();                       // 再进入 → 10 秒倒计时
+        const secondEntry = {
+            key: manager.currentBgmKey,
+            scheduled: manager.getScheduledBgmKey(),
+            timer: manager.getScheduledBgmRemaining(),
+        };
+
+        main.currentMap = { mapId: 'yunduze' };
+        main.scheduleMainMapBgm();                          // 另一张主图 → 重新计时
+        const rescheduled = {
+            scheduled: manager.getScheduledBgmKey(),
+            timer: manager.getScheduledBgmRemaining(),
+        };
+
+        main.onMapSwitched('qinglan_fuye', 'boss_arena_ch2');   // 进 Boss 关 → 立即停（含取消倒计时）
+        const inArena = { key: manager.currentBgmKey, scheduled: manager.getScheduledBgmKey() };
+
+        main.onMapSwitched('boss_arena_ch2', 'yunduze');        // 从 Boss 关回主图 → 10 秒倒计时
+        const backFromArena = {
+            scheduled: manager.getScheduledBgmKey(),
+            timer: manager.getScheduledBgmRemaining(),
+        };
+
+        main.onMapSwitched('yunduze', 'yunduze');               // 同图重新落点 → 不动音乐
+        const sameMapScheduled = manager.getScheduledBgmKey();
+
+        R.audio.mainFlow = {
+            firstEntryKey, firstEntryScheduled, afterExitKey, secondEntry,
+            rescheduled, inArena, backFromArena, sameMapScheduled,
+        };
+
+        manager.stopAll();
+        main.audioManager = null;
+        main.hasEnteredGameWorld = false;
+    }
+
+    // 14.4 对话选项按钮的悬停音效：鼠标停在按钮上只响一次（不得每帧重播）
+    //      背景（2026-09-13 修）：DialogBox.update 以前每帧用 (0,0) 空鼠标把选项按钮刷成
+    //      「未悬停」，Main 紧接着再用真实坐标 update 一次 → 每帧都被判成「刚放上去」，
+    //      滑过音效听感上就是一直响；开始界面 / 世界地图按钮只被真实鼠标 update 一次，所以没这毛病。
+    {
+        const manager = AudioManager.getInstance();
+        const originalAudio = globalThis.Audio;
+        globalThis.Audio = class {
+            constructor() {
+                this.loop = false;
+                this.volume = 1;
+                this.currentTime = 0;
+                this.src = '';
+                this._playing = false;
+            }
+            get paused() { return !this._playing; }
+            play() { this._playing = true; return Promise.resolve(); }
+            pause() { this._playing = false; }
+            addEventListener() {}
+        };
+
+        manager.stopAll();
+        manager._bgmCache.clear();
+        manager._sfxCache.clear();
+        manager._pathCache.clear();
+
+        // 只统计「播放入口被调用」的次数（与音频文件是否存在无关）
+        const originalPlaySfx = manager.playSfx;
+        const plays = { 'sfx.ui_hover': 0, 'sfx.ui_click': 0 };
+        manager.playSfx = function (key) {
+            if (plays[key] !== undefined) plays[key]++;
+            return originalPlaySfx.call(this, key);
+        };
+
+        // 真实代码路径：DialogBox + UIButton（与 Main.renderDialogueOptions 造出的选项按钮一致）
+        const box = new DialogBox({ x: 98, y: 480, width: 1085, height: 220 });
+        box.show();
+        const option = new UIButton({ x: 400, y: 500, width: 400, height: 78, text: '选项 1' });
+        box.addOptionButton(option);
+
+        // 复刻 Main.updateGameWorld 的每帧顺序：先 DialogBox.update(deltaTime)，
+        // 再用本帧真实鼠标坐标更新每个选项按钮
+        const frame = (mx, my, clicked = false) => {
+            box.update(0.016);
+            box.buttons.forEach(b => b.update(mx, my, false, clicked, 0.016));
+        };
+
+        for (let i = 0; i < 10; i++) frame(600, 530);        // 鼠标停在按钮上 10 帧
+        const hoverHoldPlays = plays['sfx.ui_hover'];
+        const hoverOffset = Math.round(option.currentOffsetY * 100) / 100;   // 悬停上移量
+
+        frame(10, 10);                                       // 移出按钮 → 不该出声
+        const hoverLeavePlays = plays['sfx.ui_hover'] - hoverHoldPlays;
+
+        frame(600, 530);                                     // 再放回去 → 再响一次
+        for (let i = 0; i < 4; i++) frame(600, 530);
+        const hoverReenterPlays = plays['sfx.ui_hover'] - hoverHoldPlays - hoverLeavePlays;
+
+        frame(600, 530, true);                               // 点一下 → 点击音效一次
+        const clickPlays = plays['sfx.ui_click'];
+
+        manager.playSfx = originalPlaySfx;
+        box.hide();
+        globalThis.Audio = originalAudio;
+        manager.stopAll();
+        manager._bgmCache.clear();
+        manager._sfxCache.clear();
+        manager._pathCache.clear();
+
+        R.audio.dialogHover = {
+            hoverHoldPlays, hoverLeavePlays, hoverReenterPlays, clickPlays, hoverOffset,
+        };
+    }
+
+    // 14.5 自动播放解锁：加载阶段（loadingOverlay）上的那一次点击同样算数，并被用来立刻补播音乐
+    //      背景（2026-09-13 修）：旧写法只在「播放真的被拦下」时才去绑交互监听，于是加载界面上
+    //      玩家的那次点击被白白浪费 —— 玩家得在开始界面**再点一次**才听得到声音，
+    //      现象就是「打开游戏后加载界面没声音，点一下游戏界面才开始播」。
+    //      现在：交互监听在 AudioManager 构造时就绑上（本次交互记进 hasUserGesture），
+    //      第一次点击 / 按键立刻补播被拦下的 BGM（handleUserGesture），并触发 onUnlock 回调
+    //      （加载界面据此收起「点一下开启声音」提示，见 game.html 的 #soundHint）。
+    {
+        const manager = AudioManager.getInstance();
+        const originalAudio = globalThis.Audio;
+
+        // 桩：解锁前 play() 以 NotAllowedError 拒绝（模拟浏览器自动播放策略），解锁后正常播放
+        let unlocked = false;
+        globalThis.Audio = class {
+            constructor() {
+                this.loop = false; this.volume = 1; this.currentTime = 0; this.src = '';
+                this._playing = false;
+            }
+            get paused() { return !this._playing; }
+            play() {
+                if (!unlocked) {
+                    return Promise.reject(Object.assign(new Error('blocked'), { name: 'NotAllowedError' }));
+                }
+                this._playing = true;
+                return Promise.resolve();
+            }
+            pause() { this._playing = false; }
+            addEventListener() {}
+        };
+
+        manager.stopAll();
+        manager._bgmCache.clear();
+        manager._sfxCache.clear();
+        manager._pathCache.clear();
+
+        const gestureBeforePlay = manager.hasUserGesture();        // 还没交互过 → false
+        const startedBlocked = manager.playBgm('bgm.main_menu');   // 发起播放（会被拦下）
+        for (let i = 0; i < 3; i++) await Promise.resolve();       // 让 play() 的 Promise 走完
+        const pendingAfterBlock = {
+            pending: manager.isBgmPending(), key: manager._pendingBgmKey,
+            playing: manager.isBgmPlaying(), gesture: manager.hasUserGesture(),
+        };
+
+        // onUnlock：第一次交互时通知外部（加载界面据此收起「点一下开启声音」提示）
+        let unlockCallbacks = 0;
+        manager.onUnlock = () => { unlockCallbacks++; };
+
+        unlocked = true;                                           // 玩家点了那一下 → 浏览器放行
+        const retried = manager.handleUserGesture();
+        const afterGesture = {
+            retried, gesture: manager.hasUserGesture(), pending: manager.isBgmPending(),
+            current: manager.currentBgmKey, playing: manager.isBgmPlaying(), unlockCallbacks,
+        };
+
+        const secondGesture = manager.handleUserGesture();         // 重复交互无害：不补播、不重复回调
+        const afterSecondGesture = {
+            secondGesture, unlockCallbacks, current: manager.currentBgmKey,
+        };
+
+        // 加载阶段「先交互、后试播」：这次交互被记下来，音乐起播时不会再被拦
+        manager.stopAll();
+        manager._bgmCache.clear();
+        manager._pathCache.clear();
+        const gestureFirst = manager.hasUserGesture();             // 已经交互过 → true
+        const playAfterGesture = manager.playBgm('bgm.main_menu');
+        const afterEarlyGesture = {
+            gestureFirst, playAfterGesture,
+            current: manager.currentBgmKey, playing: manager.isBgmPlaying(),
+        };
+
+        manager.onUnlock = null;
+        globalThis.Audio = originalAudio;
+        manager.stopAll();
+        manager._bgmCache.clear();
+        manager._sfxCache.clear();
+        manager._pathCache.clear();
+
+        R.audio.unlock = {
+            gestureBeforePlay, startedBlocked, pendingAfterBlock,
+            afterGesture, afterSecondGesture, afterEarlyGesture,
+        };
+    }
+
+    // 14.6 小游戏结算互斥：成功 / 失败绝不会同时结算
+    //      背景（2026-09-13 修）：乘风采药 update 旧顺序是「先 _checkVoidFall() 坠落判定，
+    //      再判草药是否采齐」；而地图上多株草药长在虚空瓦片上（右侧 1050,300 / 1110,344 两株就在
+    //      虚空里，只有起风时飞过去才采得到）→ 采到最后一株、同帧风又停了，就会先 fail()
+    //      （失败音效 + 失败结算）再 complete()（胜利音效 + 成功结算）：听感上是「成功和失败音效
+    //      同时播放」，结算界面也会连开两次。偶发，取决于风停与采集是否落在同一帧。
+    //      现在：采齐即本局结束（成功优先，本帧不再判坠落）＋ MiniGame.complete/fail 同一局只结算一次。
+    {
+        const manager = AudioManager.getInstance();
+        const originalAudio = globalThis.Audio;
+        globalThis.Audio = class {
+            constructor() { this.loop = false; this.volume = 1; this.currentTime = 0; this.src = ''; }
+            play() { return Promise.resolve(); }
+            pause() {}
+            addEventListener() {}
+        };
+
+        // 记录 MiniGameManager 让小游戏播出的音效键（成功 / 失败结算音效都从这里出）
+        const played = [];
+        const originalGamePlaySfx = gameAudio.playSfx;
+        gameAudio.playSfx = function (key) { played.push(key); return false; };
+
+        // ① 基类闸门：同一局只结算一次（重复 complete / 失败后再 complete 都不再触发）
+        const base = new MiniGame({ id: 'test_base', name: '测试' });
+        let baseCompletes = 0;
+        base.onComplete = () => { baseCompletes++; };
+        base.start();
+        const baseFirst = base.complete();
+        const baseSecond = base.complete();
+
+        const reversed = new MiniGame({ id: 'test_reversed', name: '测试' });
+        let reversedCompletes = 0;
+        reversed.onComplete = () => { reversedCompletes++; };
+        reversed.start();
+        const reversedFail = reversed.fail();
+        const reversedThenComplete = reversed.complete();
+
+        // ② 乘风采药：最后一株草药长在虚空上、同帧风停 → 只结算成功
+        const herb = new HerbCollectMiniGame();
+        const miniGameManager = new MiniGameManager();
+        miniGameManager.registerMiniGame('herb_collect', herb);
+        const events = [];
+        miniGameManager.onGameComplete = () => events.push('complete');
+        miniGameManager.onGameFail = () => events.push('fail');
+        const herbStarted = miniGameManager.startMiniGame('herb_collect');
+
+        herb.gamePhase = 'playing';
+        herb.herbs = herb._generateHerbs();
+        herb.requiredHerbs = herb.herbs.length;
+        const lastHerb = herb.herbs[herb.herbs.length - 1];
+        herb.herbs.forEach(h => { h.collected = h !== lastHerb; });      // 只剩最后一株
+        herb.collectedHerbs = herb.requiredHerbs - 1;
+        herb.player.x = lastHerb.x;
+        herb.player.y = lastHerb.y;
+        herb.wind.active = false;                                        // 风刚停
+        herb.wind.cooldown = 1;                                          // 本帧不会重新起风
+        const lastHerbOnVoid = herb._isVoidTile(
+            Math.floor(lastHerb.y / herb.tileSize), Math.floor(lastHerb.x / herb.tileSize));
+        played.length = 0;
+        miniGameManager.update(1 / 60, { keys: {}, pressedKeys: { e: true } });   // 按 E 采最后一株
+        const herbWin = {
+            voidTile: lastHerbOnVoid,
+            collected: herb.collectedHerbs,
+            required: herb.requiredHerbs,
+            isCompleted: herb.isCompleted, isFailed: herb.isFailed, isRunning: herb.isRunning,
+            resultSuccess: herb.result ? herb.result.success : null,
+            events: events.slice(), played: played.slice(),
+        };
+
+        // ③ 没采齐时坠落照样判失败（修完失败路径仍然有效）
+        const herb2 = new HerbCollectMiniGame();
+        const events2 = [];
+        miniGameManager.registerMiniGame('herb_collect_fall_case', herb2);
+        miniGameManager.onGameComplete = () => events2.push('complete');
+        miniGameManager.onGameFail = () => events2.push('fail');
+        const herb2Started = miniGameManager.startMiniGame('herb_collect_fall_case');
+
+        herb2.gamePhase = 'playing';
+        herb2.herbs = herb2._generateHerbs();
+        herb2.requiredHerbs = herb2.herbs.length;
+        herb2.herbs.forEach((h, i) => { h.collected = i !== 0; });        // 还差第 1 株（没采齐）
+        herb2.collectedHerbs = 1;
+        const voidSpot = herb2.herbs[herb2.herbs.length - 1];             // 站在虚空瓦片上（不采集）
+        herb2.player.x = voidSpot.x;
+        herb2.player.y = voidSpot.y;
+        herb2.wind.active = false;
+        herb2.wind.cooldown = 1;
+        played.length = 0;
+        miniGameManager.update(1 / 60, { keys: {}, pressedKeys: {} });
+        const herbFall = {
+            isCompleted: herb2.isCompleted, isFailed: herb2.isFailed, isRunning: herb2.isRunning,
+            events: events2.slice(), played: played.slice(),
+        };
+
+        gameAudio.playSfx = originalGamePlaySfx;
+        globalThis.Audio = originalAudio;
+        manager.stopAll();
+        manager._bgmCache.clear();
+        manager._sfxCache.clear();
+        manager._pathCache.clear();
+
+        R.audio.miniResult = {
+            baseFirst, baseSecond, baseCompletes,
+            reversedFail, reversedThenComplete, reversedCompletes,
+            herbStarted, herbWin,
+            herb2Started, herbFall,
+        };
+    }
+    // 14.7 乘风采药：结算回主图后「按住 E」不会再开一局 + 起风 BGM 由小游戏自己收尾
+    //      背景（2026-09-13 复现并修复）：结算就发生在「按 E 那一刻」（采到最后一株草药 / 坠落），
+    //      玩家此时通常还按着 E，浏览器会连发 keydown。旧代码 Main.handleKeyDown 的
+    //      「小游戏中忽略按键」只看 MiniGameManager.isPlaying —— 而结算那一刻它已经变成 false，
+    //      于是这一路 keydown 直接走到 handleInteraction → 脚下的「采药点」路标 → 又开一局，
+    //      而且 Main.startMiniGame 里的 switchScene('miniGame') 会把 handleMiniGameEnd 刚登记的
+    //      gameWorld 覆盖掉：玩家以为已经退出，实际小游戏还在跑 —— 重开 0.5~2 秒后起风（起风 BGM
+    //      又响），风停时若角色正好停在虚空瓦片上（玩家在主图按的 WASD 会被小游戏读走）就再判一次
+    //      fail()（失败音效）。听感即「胜利音效 → 起风 BGM → BGM 停 → 失败音效」。
+    //      现在：① 小游戏在 complete / fail / exit 里自己停起风 BGM；
+    //            ② 结算当帧到切场景之间（场景仍是 miniGame）所有按键一律忽略；
+    //            ③ Main.startMiniGame / handleInteraction 都过 isMiniGameActive() 门禁；
+    //            ④ MiniGameScene.exit 清掉 MiniGameManager 的当前小游戏状态；
+    //            ⑤ 回主图后有 0.5 秒 E 键保护期，保护期过了仍可正常重试。
+    {
+        const manager = AudioManager.getInstance();
+        const originalAudio = globalThis.Audio;
+        const played = [];
+        const bgmStopCalls = [];
+        const originalGamePlaySfx = gameAudio.playSfx;
+        const originalStopBgm = manager.stopBgm.bind(manager);
+        gameAudio.playSfx = function (key) { played.push(key); return false; };
+        manager.stopBgm = function (key) {
+            bgmStopCalls.push(Array.isArray(key) ? key.slice() : key);
+            return originalStopBgm(key);
+        };
+        globalThis.Audio = class {
+            constructor() {
+                this.loop = false; this.volume = 1; this.currentTime = 0; this.src = '';
+                this._playing = false;
+            }
+            get paused() { return !this._playing; }
+            play() { this._playing = true; return Promise.resolve(); }
+            pause() { this._playing = false; }
+            addEventListener() {}
+        };
+
+        manager.stopAll();
+        manager._bgmCache.clear();
+        manager._sfxCache.clear();
+        manager._pathCache.clear();
+
+        const main = new Main();
+        main.audioManager = manager;
+        main.player = new Player({
+            position: { x: 843, y: 368 },
+            playerData: { realm: 'zhuji', stage: '圆满', health: 200, maxHealth: 200, mana: 100, maxMana: 100, lingShi: 0 },
+            profession: { professionId: 'sanxiu' },
+        });
+        let input = { keys: {}, pressedKeys: {} };
+        main.inputManager = { getInputState: () => input, clearFrameState: () => {}, setMovementBlocked() {} };
+        main.questUI = { isVisible: false, hide() {} };
+        // 对话桩：与 DialogBox 的接口保持一致（playDialogueText 会写这些字段并调 show / setText /
+        // clearOptionButtons）——乘风采药成功退出后会走这条路播收尾对白
+        main.dialogBox = {
+            isVisible: false, dialogueLines: [], currentText: '', displayedText: '',
+            currentSpeakerName: '', isTyping: false, currentLineIndex: 0, onAdvance: null,
+            clearOptionButtons() {},
+            show() { this.isVisible = true; },
+            hide() { this.isVisible = false; },
+            setText(text, speaker) { this.currentText = text; this.currentSpeakerName = speaker; },
+            advance() {},
+        };
+        main.mapTeleport = { isVisible: false };
+        main.miniGameManager = new MiniGameManager();
+        const herb = new HerbCollectMiniGame();
+        main.miniGameManager.registerMiniGame('herb_collect', herb);
+        main.sceneManager = new SceneManager();
+        const worldScene = {
+            sceneId: 'gameWorld', isInitialized: true,
+            enter() { main.onGameWorldSceneEnter(); },
+            exit() { main.onGameWorldSceneExit(); },
+            update() {}, render() {},
+        };
+        main.sceneManager.registerScene('gameWorld', worldScene);
+        main.sceneManager.registerScene('miniGame', new MiniGameScene(main));
+        main.sceneManager.currentScene = worldScene;
+        main.sceneManager.currentSceneId = 'gameWorld';
+        main.currentMap = { mapId: 'qinglan_fuye', name: '青岚浮野' };
+        main.hasEnteredGameWorld = true;
+        main.saveManager = null;
+        main.updateGameWorld = () => {};     // 世界更新与本次断言无关（只看按键 / 音频 / 小游戏状态）
+        main.player.nearbySignpost = {
+            id: 'signpost_herb_collect', name: '采药点', gameId: 'herb_collect',
+            activate() {}, roleplayDialogue: null,
+        };
+        const sceneIdOf = () => (main.sceneManager.getCurrentScene() || {}).sceneId || null;
+        const step = () => {
+            main.sceneManager.update(1 / 60, input);
+            main.update(1 / 60, input);
+            input = { keys: {}, pressedKeys: {} };
+        };
+
+        // 进小游戏 → 起风 → 采齐全（和玩家真实操作同一条链路：由 MiniGameScene.update 驱动）
+        main.startMiniGame('herb_collect', () => {});
+        herb.gamePhase = 'playing';
+        herb.wind.cooldown = 0;
+        step();
+        const bgmAtWindStart = manager.currentBgmKey;
+        herb.wind.duration = 9999;
+        step();
+        const playedBeforeWin = played.length;
+        const stopCallsBeforeWin = bgmStopCalls.length;
+        for (let i = 0; i < herb.herbs.length; i++) {
+            const h = herb.herbs[i];
+            herb.player.x = h.x; herb.player.y = h.y;
+            input = { keys: {}, pressedKeys: { e: true } };
+            step();
+        }
+        const afterWin = {
+            completed: herb.isCompleted, failed: herb.isFailed, running: herb.isRunning,
+            mgrPlaying: main.miniGameManager.isPlaying, scene: sceneIdOf(),
+            bgmKey: manager.currentBgmKey, bgmPlaying: manager.isBgmPlaying(),
+            played: played.slice(playedBeforeWin),
+            bgmStopCalls: bgmStopCalls.slice(stopCallsBeforeWin),
+        };
+
+        // 结算后的连发 E（落在切场景之前）→ 旧代码会在这里重开一局
+        main.handleKeyDown('e');
+        const heldEBeforeSwitch = {
+            mgrPlaying: main.miniGameManager.isPlaying, herbRunning: herb.isRunning,
+            scene: sceneIdOf(),
+            herbPos: { x: Math.round(herb.player.x), y: Math.round(herb.player.y) },
+        };
+
+        step();                              // 下一帧：真正切回主图（MiniGameScene.exit 会清状态）
+        const backToWorld = {
+            scene: sceneIdOf(),
+            mgrPlaying: main.miniGameManager.isPlaying,
+            mgrFinished: main.miniGameManager.isFinished,
+            currentGame: main.miniGameManager.currentMiniGame ? main.miniGameManager.currentMiniGame.id : null,
+            guard: Number(main._miniGameExitGuard.toFixed(3)),
+        };
+
+        // 主图里继续按 E（保护期内）→ 不该重开
+        main.handleKeyDown('e');
+        const heldEInWorld = { mgrPlaying: main.miniGameManager.isPlaying, herbRunning: herb.isRunning };
+
+        // 保护期内按 WASD 走动 1 秒：旧代码里小游戏还在跑，会被主图的同一份输入带着乱走
+        for (let i = 0; i < 60; i++) { input = { keys: { d: true }, pressedKeys: {} }; step(); }
+        const afterWalking = {
+            mgrPlaying: main.miniGameManager.isPlaying, herbRunning: herb.isRunning,
+            scene: sceneIdOf(),
+            windBgmPlaying: manager.currentBgmKey === 'bgm.minigame_herb' || manager.isBgmPlaying(),
+            playedAfterWin: played.slice(playedBeforeWin),
+            guard: Number(main._miniGameExitGuard.toFixed(3)),
+        };
+
+        // 保护期过后玩家主动按 E → 仍要能正常开一局（失败重试流程不能被堵死）
+        main.handleKeyDown('e');
+        const retryAfterGuard = {
+            mgrPlaying: main.miniGameManager.isPlaying, herbRunning: herb.isRunning,
+            guard: Number(main._miniGameExitGuard.toFixed(3)),
+        };
+
+        gameAudio.playSfx = originalGamePlaySfx;
+        manager.stopBgm = originalStopBgm;
+        globalThis.Audio = originalAudio;
+        manager.stopAll();
+        manager._bgmCache.clear();
+        manager._sfxCache.clear();
+        manager._pathCache.clear();
+
+        R.audio.herbExit = {
+            bgmAtWindStart, afterWin, heldEBeforeSwitch, backToWorld,
+            heldEInWorld, afterWalking, retryAfterGuard,
+        };
+    }
+
+
+
+
+    // ---- 14.8 乘风采药：胜利锁定 / 成功退出后的收尾对白 / 进小游戏输入隔离 ----
+    //      对应玩家反馈：「乘风采药胜利后会同时播放胜利和失败的音效」。
+    //      复现结论（2026-09-13）：赢下小游戏后玩家再按一次 E（保护期已过）会开出新一局，
+    //      而主图里一直按着的方向键会被这一局读走（角色一进局就被推着往虚空走），风一停
+    //      坠落判失败 → 胜利音效还没放完又响一遍失败音效。三条加固后此路不通：
+    //      ① 采齐即置 isWinLocked：同一局里任何失败判定（坠落 / 到点 / 重复结算）一律忽略，
+    //         MiniGameManager 再按「一局只结算一次」把结算音效锁死（先到的那条路径生效）；
+    //      ② 成功退出后播一句收尾对白（路标 successDialogue，缺省用 Main 内置台词）；
+    //      ③ 进小游戏时放掉主图按住的方向键（必须重新按才生效），不再被主图操作推着走。
+    {
+        const manager = AudioManager.getInstance();
+        const originalAudio = globalThis.Audio;
+        const played = [];
+        const originalGamePlaySfx = gameAudio.playSfx;
+        gameAudio.playSfx = function (key) { played.push(key); return false; };
+        globalThis.Audio = class {
+            constructor() {
+                this.loop = false; this.volume = 1; this.currentTime = 0; this.src = '';
+                this._playing = false;
+            }
+            get paused() { return !this._playing; }
+            play() { this._playing = true; return Promise.resolve(); }
+            pause() { this._playing = false; }
+            addEventListener() {}
+        };
+        manager.stopAll();
+        manager._bgmCache.clear();
+        manager._sfxCache.clear();
+        manager._pathCache.clear();
+
+        const main = new Main();
+        main.audioManager = manager;
+        main.player = new Player({
+            position: { x: 843, y: 368 },
+            playerData: { realm: 'zhuji', stage: '圆满', health: 200, maxHealth: 200, mana: 100, maxMana: 100, lingShi: 0 },
+            profession: { professionId: 'sanxiu' },
+        });
+        main.player.questSystem = null;      // 本段只验证小游戏 / 对白 / 输入，跳过任务推进
+
+        // 输入桩：与真实 InputManager 同语义 —— 按住键在 keys（不带 keyup 不会自己掉），
+        // 本帧刚按下的在 pressedKeys（每帧末 clearFrameState 清空）
+        const heldKeys = {};
+        let pressedKeys = {};
+        let heldClears = 0;
+        main.inputManager = {
+            getInputState: () => ({ keys: heldKeys, pressedKeys: pressedKeys }),
+            clearFrameState: () => { pressedKeys = {}; },
+            clearHeldKeys() {
+                let n = 0;
+                for (const k of Object.keys(heldKeys)) {
+                    if (heldKeys[k]) { heldKeys[k] = false; n++; }
+                }
+                heldClears++;
+                return n;
+            },
+            setMovementBlocked() {},
+        };
+
+        const dialogLog = [];
+        main.dialogBox = {
+            isVisible: false, dialogueLines: [], currentText: '', displayedText: '',
+            currentSpeakerName: '', isTyping: false, currentLineIndex: 0, onAdvance: null,
+            clearOptionButtons() {},
+            show() { this.isVisible = true; },
+            hide() { this.isVisible = false; },
+            setText(text, speaker) {
+                this.currentText = text;
+                this.currentSpeakerName = speaker;
+                dialogLog.push({ text: text, speaker: speaker });
+            },
+            advance() {},
+        };
+        main.questUI = { isVisible: false, hide() {} };
+        main.mapTeleport = { isVisible: false };
+        main.miniGameManager = new MiniGameManager();
+        const herb = new HerbCollectMiniGame();
+        main.miniGameManager.registerMiniGame('herb_collect', herb);
+        main.sceneManager = new SceneManager();
+        const worldScene = {
+            sceneId: 'gameWorld', isInitialized: true,
+            enter() {}, exit() {}, update() {}, render() {},
+        };
+        main.sceneManager.registerScene('gameWorld', worldScene);
+        main.sceneManager.registerScene('miniGame', new MiniGameScene(main));
+        main.sceneManager.currentScene = worldScene;
+        main.sceneManager.currentSceneId = 'gameWorld';
+        main.currentMap = { mapId: 'qinglan_fuye', name: '青岚浮野' };
+        main.hasEnteredGameWorld = true;
+        main.saveManager = null;
+        main.updateGameWorld = () => {};
+
+        // 采药点路标（含成功后的收尾对白；字段与 Signpost 一致，见 js/Signpost.js）
+        main.player.nearbySignpost = {
+            id: 'signpost_herb_collect', name: '采药点', gameId: 'herb_collect', oneShot: false,
+            activate() {}, roleplayDialogue: null,
+            successDialogue: '止风草齐了三份，趁着露水还重，赶紧给阿禾送去。',
+            successSpeaker: '主角: ',
+        };
+
+        const sceneIdOf = () => (main.sceneManager.getCurrentScene() || {}).sceneId || null;
+        const step = (pressed) => {
+            pressedKeys = pressed || {};
+            const cur = { keys: heldKeys, pressedKeys: pressedKeys };
+            main.sceneManager.update(1 / 60, cur);
+            main.update(1 / 60, cur);
+        };
+        // ① 玩家按着 D（往右走）时按 E 进小游戏 → 主图那份「按住」必须被放掉
+        heldKeys['d'] = true;
+        main.startMiniGameFromSignpost(main.player.nearbySignpost);
+        const inputIsolation = { cleared: heldClears, heldDAfterStart: !!heldKeys['d'] };
+
+        // 采齐全部草药（真实链路：MiniGameScene.update 驱动，一次按 E 采一株）
+        herb.gamePhase = 'playing';
+        herb.isFirstPlay = false;
+        herb.wind.active = true; herb.wind.duration = 9999; herb.wind.cooldown = 0;
+        step();
+        for (let i = 0; i < herb.herbs.length; i++) {
+            const h = herb.herbs[i];
+            herb.player.x = h.x; herb.player.y = h.y;
+            step({ e: true });
+        }
+        // ② 赢完再强行跑一遍失败逻辑（站在虚空瓦片上坠落 + 直接 fail）→ 必须被胜利锁定拦住
+        herb.wind.active = false;
+        herb.wind.cooldown = 99;
+        herb.player.x = 1110; herb.player.y = 344;
+        herb.gamePhase = 'playing';
+        const forcedFail = herb.fail();
+        herb._checkVoidFall();
+        const winLock = {
+            completed: herb.isCompleted, failed: herb.isFailed, winLocked: herb.isWinLocked,
+            forcedFailResult: forcedFail,
+            victoryPlays: played.filter(k => k === 'sfx.victory').length,
+            defeatPlays: played.filter(k => k === 'sfx.defeat').length,
+        };
+
+        // ③ 回主图那一帧 → 播成功收尾对白；按 J / 点击读完即关闭
+        step();
+        const dialog = {
+            log: dialogLog.slice(), visible: main.dialogBox.isVisible,
+            storyActive: main.storyDialogueActive,
+        };
+        main.dialogBox.onAdvance();
+        dialog.closedVisible = main.dialogBox.isVisible;
+        dialog.closedStory = main.storyDialogueActive;
+
+        // ④ 保护期过后玩家再按 E「再采一次」：此时玩家在主图仍按着 D（右侧就是虚空）
+        for (let i = 0; i < 40; i++) step();
+        const guardAfterWalk = Number(main._miniGameExitGuard.toFixed(3));
+        heldKeys['d'] = true;
+        main.handleKeyDown('e');
+        const reentry = {
+            mgrPlaying: main.miniGameManager.isPlaying, herbRunning: herb.isRunning,
+            scene: sceneIdOf(), heldDAfterReentryStart: !!heldKeys['d'], cleared: heldClears,
+            pos: { x: Math.round(herb.player.x), y: Math.round(herb.player.y) },
+        };
+        const playedBeforeIdle = played.length;
+        for (let i = 0; i < 900; i++) step();     // 15 秒：主图的 D 要是带进小游戏，早就飘进虚空摔死了
+        const afterReentry = {
+            failed: herb.isFailed, running: herb.isRunning,
+            pos: { x: Math.round(herb.player.x), y: Math.round(herb.player.y) },
+            played: played.slice(playedBeforeIdle),
+        };
+
+        // ⑤ 重新按下 D → 小游戏里照常能走（输入隔离不会把操作堵死）
+        heldKeys['d'] = true;
+        const moveBefore = Math.round(herb.player.x);
+        for (let i = 0; i < 60; i++) {
+            step();
+            if (!herb.isRunning) break;
+        }
+        const freshPressMoves = { before: moveBefore, after: Math.round(herb.player.x) };
+
+        gameAudio.playSfx = originalGamePlaySfx;
+        globalThis.Audio = originalAudio;
+        manager.stopAll();
+        manager._bgmCache.clear();
+        manager._sfxCache.clear();
+        manager._pathCache.clear();
+
+        R.audio.herbWinLock = {
+            inputIsolation, winLock, dialog, guardAfterWalk, reentry, afterReentry, freshPressMoves,
+        };
+    }
+
+    // ---- 14.9 乘风采药：风是固定节奏（起风 3 秒 / 间隔 5 秒）+ 起风 BGM 与风同步 ----
+    //      对应本次需求（第十三次改动）：
+    //        ① 无风时玩家不能离开陆地；② 有风时可离开陆地（虚空可走 / 可站）；
+    //        ③ 风停时玩家还在虚空 → 小游戏失败；
+    //        ⑤ 每次风固定 3 秒左右、起风间隔固定 5 秒（不再随机）；
+    //        ⑥ 起风时才循环播放 BGM，风停立即停（结算 / 退出另见 14.7 / 14.8）。
+    //      全部走真实 update 链路（每帧 1/60 秒），按真实帧数统计起风 / 静风窗口。
+    {
+        const manager = AudioManager.getInstance();
+        const originalAudio = globalThis.Audio;
+        const bgmCalls = [];
+        const originalPlayBgm = manager.playBgm;
+        const originalStopBgm = manager.stopBgm;
+        let clock = 0;
+        manager.playBgm = function (key) {
+            bgmCalls.push({ call: 'play', key: key, at: Number(clock.toFixed(2)) });
+            return true;
+        };
+        manager.stopBgm = function (key) {
+            bgmCalls.push({
+                call: 'stop',
+                key: Array.isArray(key) ? key.join('|') : key,
+                at: Number(clock.toFixed(2)),
+            });
+            return true;
+        };
+        globalThis.Audio = class {
+            constructor() {
+                this.loop = false; this.volume = 1; this.currentTime = 0; this.src = '';
+                this._playing = false;
+            }
+            get paused() { return !this._playing; }
+            play() { this._playing = true; return Promise.resolve(); }
+            pause() { this._playing = false; }
+            addEventListener() {}
+        };
+
+        // ① 时间线：16.5 秒逐帧推进（静风 5s → 起风 3s → 静风 5s → 起风 3s …），记录每帧 wind.active
+        const timelineGame = new HerbCollectMiniGame();
+        timelineGame.start();
+        timelineGame.gamePhase = 'playing';
+        const frames = Math.round(16.5 * 60);
+        const flags = [];
+        for (let i = 0; i < frames; i++) {
+            clock = (i + 1) / 60;
+            timelineGame.update(1 / 60, { keys: {}, pressedKeys: {} });
+            flags.push(timelineGame.wind.active ? 1 : 0);
+        }
+        // 起风窗口（连续段）：[start, end) 帧号
+        const gusts = [];
+        let runStart = -1;
+        for (let i = 0; i <= flags.length; i++) {
+            const on = i < flags.length && flags[i] === 1;
+            if (on && runStart === -1) runStart = i;
+            if (!on && runStart !== -1) { gusts.push([runStart, i]); runStart = -1; }
+        }
+        const gustSeconds = gusts.map(g => Number(((g[1] - g[0]) / 60).toFixed(2)));
+        const gustStarts = gusts.map(g => Number((g[0] / 60).toFixed(2)));
+        const calmBetweenGusts = gusts.length >= 2
+            ? Number(((gusts[1][0] - gusts[0][1]) / 60).toFixed(2))
+            : null;
+        // 时间线里的 BGM 调用（剔除 start() 开局那一次 stop：那是「新一局先把 BGM 收干净」，
+        // 时钟还是 0，与起风 / 风停的节奏无关）；后面的探针不再记账。
+        const timelineBgmCalls = bgmCalls.filter(c => c.at > 1);
+        bgmCalls.length = 0;
+
+        // ② 无风时踩在虚空上 → 一帧就判失败（风停还在虚空 = 失败）
+        const fallGame = new HerbCollectMiniGame();
+        const fallEvents = [];
+        fallGame.onFail = () => fallEvents.push('fail');
+        fallGame.start();
+        fallGame.gamePhase = 'playing';
+        fallGame.wind.active = false;
+        fallGame.wind.cooldown = 99;                                  // 本局内不会起风
+        fallGame.player.x = 1110; fallGame.player.y = 344;            // 虚空瓦片（右侧草药位）
+        const fallFootprintOnLand = fallGame._isFootprintAllOnLand();
+        fallGame.update(1 / 60, { keys: {}, pressedKeys: {} });
+
+        // ③ 有风时同一片虚空可以自由走（走位不被拦、也不会判坠落）
+        const flyGame = new HerbCollectMiniGame();
+        flyGame.start();
+        flyGame.gamePhase = 'playing';
+        flyGame.wind.active = true; flyGame.wind.duration = 99;
+        flyGame.player.x = 1010; flyGame.player.y = 340;              // 虚空瓦片
+        const flyFrom = flyGame.player.x;
+        for (let i = 0; i < 60; i++) {
+            flyGame.update(1 / 60, { keys: { d: true }, pressedKeys: {} });
+        }
+        const flyMoved = Number((flyGame.player.x - flyFrom).toFixed(1));
+
+        // ④ 无风时站在陆地边缘往虚空走 → 被拦（不能离开陆地）
+        const lockGame = new HerbCollectMiniGame();
+        lockGame.start();
+        lockGame.gamePhase = 'playing';
+        lockGame.wind.active = false;
+        lockGame.wind.cooldown = 99;
+        lockGame.player.x = 460; lockGame.player.y = 550;             // 陆地最右缘（右邻虚空）
+        const lockFrom = lockGame.player.x;
+        for (let i = 0; i < 30; i++) {
+            lockGame.update(1 / 60, { keys: { d: true }, pressedKeys: {} });
+        }
+        const lockMoved = Number((lockGame.player.x - lockFrom).toFixed(1));
+
+        manager.playBgm = originalPlayBgm;
+        manager.stopBgm = originalStopBgm;
+        globalThis.Audio = originalAudio;
+
+        R.audio.herbWind = {
+            gusts: gusts,
+            gustSeconds: gustSeconds,
+            gustStarts: gustStarts,
+            calmBetweenGusts: calmBetweenGusts,
+            windFramesTotal: flags.reduce((a, b) => a + b, 0),
+            timelineFailed: timelineGame.isFailed,
+            bgmCalls: timelineBgmCalls,
+            // 时间线之后另外开了 3 局探针（坠落 / 飞行 / 陆地拦截）→ 每局 start() 都会先收掉起风 BGM
+            newGameStartStops: bgmCalls.length,
+            fall: {
+                footprintOnLand: fallFootprintOnLand,
+                failed: fallGame.isFailed,
+                events: fallEvents.slice(),
+            },
+            fly: { moved: flyMoved, failed: flyGame.isFailed },
+            landLock: { moved: lockMoved, failed: lockGame.isFailed },
+        };
+    }
+
     const story = Chapter2Config.getStoryDialogues();
     R.story = {
         ids: Object.keys(story),

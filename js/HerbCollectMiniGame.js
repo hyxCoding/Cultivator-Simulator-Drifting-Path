@@ -1,10 +1,32 @@
 /**
  * 乘风采药小游戏
- * 瓦片地图碰撞 + 随机风系统 + 草药采集
+ * 瓦片地图碰撞 + 固定节奏风系统 + 草药采集
  * 地图：1280×720，32×18 格，每格 40px（精确适配碰撞图分辨率）
  * 起风时主角切换为乘风飞行动画
  * 碰撞判断：继承自 collision.png 分析结果，硬编码为静态 COLLISION_MAP（32×18），
  *   避免运行时 getImageData 在 file:// 协议下受 CORS 限制无法读取像素
+ *
+ * ==========================================================================
+ * 一、核心规则（第十三次改动后的最终需求，改行为先看这里）
+ *   1) 无风时玩家只能待在陆地上：走位要求「整块碰撞盒（22×26）都落在陆地瓦片」才允许
+ *      （_updatePlayerMovement → _canStandAt → _isTileWalkable）；
+ *   2) 有风时虚空瓦片同样可站 / 可走（角色切乘风飞行动画）；
+ *   3) 风一停，玩家若还留在虚空上 → 小游戏失败（_checkVoidFall：判定对象与走位一致，
+ *      碰撞盒有任何一格是虚空即算「还在虚空」）；
+ *   4) 采完全部草药 → 立刻胜利：本帧结算 complete()（胜利音效）→ 退出小游戏
+ *      （MiniGameScene → Main.handleMiniGameEnd 切回主图）→ 主角收尾对白
+ *      （文本见路标 successDialogue / Main.playHerbCollectSuccessDialogue）；
+ *   5) 风系统是固定节奏，不再随机：每次起风固定 WIND_DURATION_SECONDS（3 秒），
+ *      上一阵风停到下一阵风起固定 WIND_INTERVAL_SECONDS（5 秒）—— 见 _updateWind()；
+ *   6) 背景音乐 bgm.minigame_herb **只在起风期间循环**：起风播、风停立刻停，
+ *      本局结算（complete / fail）与退出（exit）也立刻停（_stopWindBgm）。
+ *
+ * 二、每帧只更新一次（2026-09-13 第十三次改动一并修掉）
+ *   更新链路只有一条：GameLoop → SceneManager.update → MiniGameScene.update →
+ *   MiniGameManager.update。Main.update 不再重复驱动小游戏 —— 旧代码
+ *   MiniGameScene.update 与 Main.updateMiniGame 各调一次，同一帧 dt 翻倍：
+ *   固定节奏的风会变成「实际 1.5 秒」，同一份 pressedKeys 也会被读两遍。
+ * ==========================================================================
  */
 // 碰撞数据（硬编码自 collision.png 逐瓦片白/黑像素统计）
 // 1=陆地, 0=虚空；32 列 × 18 行，每格 40px；1280×720 地图
@@ -29,6 +51,16 @@ const COLLISION_MAP = [
 [0,0,0,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
 ];
 
+// ==========================================================================
+//  风系统节奏（固定值）
+// --------------------------------------------------------------------------
+//  · WIND_DURATION_SECONDS：一次起风持续多久（秒）—— 需求「每次风持续的时间都是固定时长，3 秒左右」
+//  · WIND_INTERVAL_SECONDS：上一阵风停到下一阵风起之间的间隔（秒）—— 需求「起风的时间间隔为 5 秒」
+//  只在这两个常量上调节奏；_updateWind() 是唯一读取它们的地方（不再随机抽时长 / 冷却）。
+// ==========================================================================
+const WIND_DURATION_SECONDS = 3;
+const WIND_INTERVAL_SECONDS = 5;
+
 class HerbCollectMiniGame extends MiniGame {
     constructor(config) {
         super({ id: 'herb_collect', name: '乘风采药', timeLimit: 0, maxScore: 100, ...config });
@@ -39,7 +71,12 @@ class HerbCollectMiniGame extends MiniGame {
         this.mapWidth = 1280;
         this.mapHeight = 720;
         this.player = { x: 300, y: 550, width: 22, height: 26, speed: 160 };
-        this.wind = { active: false, timer: 0, duration: 0, cooldown: 0, animOffset: 0, fadeAlpha: 0, fadeSpeed: 2.0 };
+        // 风状态（固定节奏，见 WIND_DURATION_SECONDS / WIND_INTERVAL_SECONDS）
+        //   active   —— 当前是否有风（有风时虚空可走 / 可站，BGM 循环播放）
+        //   timer    —— 本阶段已经过的秒数（起风时 = 本阵风已刮多久；静风时也照常累加）
+        //   duration —— 一阵风的固定时长（起风那一刻写入，供 HUD / 调试查看）
+        //   cooldown —— 距离下一阵风还有多少秒（静风期间递减，归零即起风）
+        this.wind = { active: false, timer: 0, duration: WIND_DURATION_SECONDS, cooldown: WIND_INTERVAL_SECONDS, animOffset: 0, fadeAlpha: 0, fadeSpeed: 2.0 };
         this.windAnimFrame = 0;
         this.windAnimTimer = 0;
         this.herbs = this._generateHerbs();
@@ -107,25 +144,48 @@ class HerbCollectMiniGame extends MiniGame {
         this.herbs = this._generateHerbs();
         this.collectedHerbs = 0;
         this.nearbyHerb = null;
-        this.wind.active = false; this.wind.timer = 0; this.wind.duration = 0;
-        this.wind.cooldown = 0.5 + Math.random() * 1.5; // 首次起风随机 0.5~2 秒
+        this.wind.active = false;
+        this.wind.timer = 0;
+        // 一阵风固定 3 秒；开局先静风固定 5 秒（旧写法是 0.5~2 秒随机 + 5~10 秒随机风）
+        this.wind.duration = WIND_DURATION_SECONDS;
+        this.wind.cooldown = WIND_INTERVAL_SECONDS;
         this.wind.animOffset = 0; this.wind.fadeAlpha = 0;
         this.windAnimFrame = 0; this.windAnimTimer = 0;
         this.gamePhase = this.isFirstPlay ? 'tutorial' : 'playing';
         this.tutorialStep = 0; this.tutorialTimer = 0;
         this.keys = {}; this.eJustPressed = false;
+        // 背景音乐：新一局开始时确保「起风期间才播」的小游戏 BGM 是停着的
+        this._stopWindBgm();
     }
 update(dt, input) {
         super.update(dt, input);
         if (!this.isRunning || this.isPaused) return;
         this._readInput(input);
         if (this.gamePhase === 'tutorial') this._updateTutorial(dt);
-        if (this.gamePhase === 'playing') this._updateWind(dt);
+        // 风系统按固定时间线推进：教学阶段也照样起风 / 停风
+        // （教学第 3 步就是「风起时可在虚空中行走」，旧写法只在 playing 阶段推进风，
+        //   教学时永远等不到风。走同一条时间线，教学与正式局的节奏也完全一致。）
+        this._updateWind(dt);
         this._updatePlayerMovement(dt);
         this._updateWindVisual(dt);
         this._checkHerbProximity();
+
+        // 先判「采齐」再判「坠落」：最后一株草药若正好长在虚空上（x/y 见 _generateHerbs，
+        // 右侧两株确实在虚空瓦片上）、同帧风又停了，旧顺序会先 fail() 再 complete() ——
+        // 成功 / 失败音效同时响、结算界面连开两次（偶发）。采齐即本局结束（成功优先），
+        // 本帧不再做坠落判定。
+        //
+        // 2026-09-13 追加加固（玩家反馈：胜利后仍会听到失败音效）：
+        //   胜利判定不止「本帧返回」，还置**胜利锁定状态位** this.isWinLocked ——
+        //   此后同一局里任何一处失败判定（本帧以后的坠落、到点结算 checkTimeUp）都被忽略，
+        //   胜利与失败两套逻辑不会再各响一次（见 _checkVoidFall / fail / MiniGame.isWinLocked）。
+        if (this.collectedHerbs >= this.requiredHerbs) {
+            this.isWinLocked = true;      // 胜利锁定：本局不再接受任何失败判定
+            this.score = this.maxScore;
+            this.complete();
+            return;
+        }
         this._checkVoidFall();
-        if (this.collectedHerbs >= this.requiredHerbs) { this.score = this.maxScore; this.complete(); }
     }
 
     _readInput(input) {
@@ -154,26 +214,70 @@ update(dt, input) {
     }
 
     // ======================================================================
-    //  风系统
+    //  风系统（固定节奏：静风 5 秒 → 起风 3 秒 → 静风 5 秒 → ……）
     // ======================================================================
 
+    /**
+     * 推进风系统（固定时长，不再随机）
+     *
+     * 时间线（从 start() 那一刻算起）：
+     *   0s ── 静风 5 秒（cooldown 从 WIND_INTERVAL_SECONDS 递减到 0）── 5s
+     *   5s ── 起风 3 秒（timer 从 0 累加到 WIND_DURATION_SECONDS）── 8s
+     *   8s ── 风停 → 重新静风 5 秒 ── 13s 起下一阵风 …… 如此循环
+     *
+     * 与需求一一对应：
+     *   · 「每次风持续的时间都是固定时长，3 秒左右」→ duration 每次写 WIND_DURATION_SECONDS；
+     *   · 「起风的时间间隔为 5 秒」→ 风停后 cooldown 重置为 WIND_INTERVAL_SECONDS；
+     *   · 「只有起风时循环播放背景音乐，一旦风停止立即停止」→ 起风分支 playBgm，
+     *     风停分支 _stopWindBgm（结算 / 退出另有 complete / fail / exit 三处收尾）。
+     *
+     * 注意：本局结算（complete / fail）后 update 不再被驱动，所以这里的风停分支
+     * 只处理「小游戏还在进行时的那一次风停」。
+     * @param {number} dt - 帧时长（秒）
+     */
     _updateWind(dt) {
         if (this.wind.active) {
+            // ---- 起风中：推进本阵风的计时，到点即停风（立刻停 BGM） ----
             this.wind.timer += dt;
             this.wind.fadeAlpha = Math.min(1, this.wind.fadeAlpha + this.wind.fadeSpeed * dt);
             if (this.wind.timer >= this.wind.duration) {
-                this.wind.active = false; this.wind.timer = 0;
+                // 风停：本次改动的核心之一 —— 此刻还在虚空上的玩家由 _checkVoidFall 判失败
+                this.wind.active = false;
+                this.wind.timer = 0;
+                this.wind.duration = WIND_DURATION_SECONDS;
+                this.wind.cooldown = WIND_INTERVAL_SECONDS;   // 间隔固定 5 秒（不再随机）
                 this.wind.fadeAlpha = Math.max(0, 1 - this.wind.fadeSpeed * dt * 2);
-                this.wind.cooldown = 0.5 + Math.random() * 1.5; // 风停后 0.5~2 秒再次起风
+                // 风停 → 小游戏背景音乐立即停止（只停这一首，不动别的）
+                this._stopWindBgm();
             }
         } else {
+            // ---- 静风中：等待固定间隔后起风 ----
+            this.wind.timer += dt;
             this.wind.cooldown -= dt;
             this.wind.fadeAlpha = Math.max(0, this.wind.fadeAlpha - this.wind.fadeSpeed * dt);
             if (this.wind.cooldown <= 0) {
-                this.wind.active = true; this.wind.duration = 5 + Math.random() * 5;
-                this.wind.timer = 0; this.wind.fadeAlpha = 0;
+                // 起风：固定时长 3 秒
+                this.wind.active = true;
+                this.wind.duration = WIND_DURATION_SECONDS;
+                this.wind.timer = 0;
+                this.wind.fadeAlpha = 0;
+                // 起风 → 循环播放小游戏背景音乐（风停 / 小游戏结束立刻停）
+                gameAudio.playBgm('bgm.minigame_herb');
             }
         }
+    }
+
+    /**
+     * 停掉「起风期间才播」的小游戏 BGM（bgm.minigame_herb）
+     *
+     * 这首 BGM 只属于本小游戏，所以「谁起播谁收尾」：起风时播、风停时停，
+     * 另外**本局结算（complete / fail）与退出（exit）也必须停** —— 不能只靠
+     * Main.handleMiniGameEnd 兜底：任何绕过「小游戏场景 → handleMiniGameEnd」的路径
+     * （例如结算当帧又按 E 被路标重开一局）都会把这首 BGM 留在场上继续响。
+     * 重复调用无副作用（AudioManager.stopBgm 只停这一首，没在播就什么都不做）。
+     */
+    _stopWindBgm() {
+        gameAudio.stopBgm('bgm.minigame_herb');
     }
 
     _updateWindVisual(dt) {
@@ -261,19 +365,52 @@ update(dt, input) {
         return this.collisionData[r][c] !== 1;
     }
 
+    /**
+     * 玩家的整块碰撞盒是否完全落在陆地上（忽略风状态，纯地形查询）
+     *
+     * 与 _canStandAt 用同一套「碰撞盒 → 覆盖到的每格瓦片」算法，但只查地形：
+     * 无风时玩家能站在哪里（走位）与「风停后是否还留在虚空」（坠落判定）共用这一把尺子，
+     * 避免出现「走位按碰撞盒、坠落只看角色中心那一格」的两套判定错位。
+     * @returns {boolean} true = 碰撞盒覆盖的每一格都是陆地
+     */
+    _isFootprintAllOnLand() {
+        const pw = this.player.width, ph = this.player.height;
+        const l = this.player.x - pw / 2, t = this.player.y - ph / 2;
+        const tile = this.tileSize;
+        const c1 = Math.floor(l / tile), r1 = Math.floor(t / tile);
+        const c2 = Math.floor((l + pw - 1) / tile), r2 = Math.floor((t + ph - 1) / tile);
+        for (let r = r1; r <= r2; r++)
+            for (let c = c1; c <= c2; c++)
+                if (this._isVoidTile(r, c)) return false;
+        return true;
+    }
+
     // ======================================================================
     //  虚空坠落
     // ======================================================================
 
+    /**
+     * 虚空坠落判定：风停之后玩家还留在虚空上 → 失败
+     *
+     * 判定对象与走位完全一致（整块碰撞盒，见 _isFootprintAllOnLand）：
+     *   · 走位（_updatePlayerMovement → _canStandAt → _isTileWalkable）要求碰撞盒每一格都可站，
+     *     无风时虚空瓦片一律不可站；
+     *   · 这里同样按整块碰撞盒反查「是否还踩在虚空上」—— 只要有一格是虚空（含越出地图的越界格），
+     *     就算「还在虚空」，风停即败。
+     * 用同一把尺子（而不是只看角色中心那一格）是为了避免两套判定错位：
+     * 旧写法走位按碰撞盒、坠落只看中心点，站在陆地边缘时会出现「看着站在陆地上却判失败」。
+     * 另：本帧采齐时 update 里已先行 complete()（胜利锁定），这里会直接返回。
+     */
     _checkVoidFall() {
+        if (this.isWinLocked) return;         // 本局已采齐（胜利锁定）→ 坠落判定作废
+        // 教学阶段（首局 isFirstPlay 的那一段）不判坠：教学第 3 步正是让玩家试
+        // 「风起时可在虚空中行走」，首局一进虚空就判失败太苛刻；风停后被留在虚空上也只是
+        // 等 5 秒下一阵风就能飞回来（不会卡死）。教学结束（gamePhase = 'playing'）后全程生效。
         if (this.gamePhase !== 'playing') return;
-        const c = Math.floor(this.player.x / this.tileSize);
-        const r = Math.floor(this.player.y / this.tileSize);
-        // 站在虚空瓦片上且风已停 → 坠落失败
-        if (this._isVoidTile(r, c) && !this.wind.active) {
-            this.fail();
-        }
-        if (this.player.x < 0 || this.player.x > this.mapWidth || this.player.y < 0 || this.player.y > this.mapHeight) {
+        if (!this.isRunning) return;          // 已经结算（采齐 / 坠落）→ 不再重复判定
+        if (this.wind.active) return;         // 有风时可停在虚空上（乘风飞行），无需判定
+        // 风停：碰撞盒碰到任何虚空瓦片 → 坠落失败
+        if (!this._isFootprintAllOnLand()) {
             this.fail();
         }
     }
@@ -295,6 +432,8 @@ update(dt, input) {
             this.collectedHerbs++;
             this.score = (this.collectedHerbs / this.requiredHerbs) * this.maxScore;
             this.nearbyHerb = null;
+            // 拾取音效：与拾取任务道具同一个音效（缺失音频文件时静默跳过）
+            gameAudio.playSfx('sfx.pickup');
         }
     }
 // ======================================================================
@@ -467,7 +606,10 @@ update(dt, input) {
         ctx.font = '16px Microsoft YaHei';
         ctx.textAlign = 'left';
         ctx.fillText('草药: ' + this.collectedHerbs + '/' + this.requiredHerbs, bx + 12, by + 24);
-        const windText = this.wind.active ? '起风' : '风息';
+        // 风况：固定节奏（起风 3 秒 / 间隔 5 秒）→ 把剩余秒数一并给玩家，便于安排飞行时机
+        const windText = this.wind.active
+            ? ('起风 ' + Math.max(0, this.wind.duration - this.wind.timer).toFixed(1) + 's')
+            : ('风息 ' + Math.max(0, this.wind.cooldown).toFixed(1) + 's');
         ctx.fillStyle = this.wind.active ? '#aaddff' : '#aaaaaa';
         ctx.textAlign = 'right';
         ctx.fillText(windText, bx + bw - 12, by + 24);
@@ -501,4 +643,39 @@ update(dt, input) {
     // ======================================================================
 
     getPassScore() { return Math.ceil(this.maxScore * 0.5); }
+
+    // ======================================================================
+    //  结算 / 退出：小游戏自己收尾（起风 BGM 不再只依赖 Main 兜底）
+    // ======================================================================
+    //  背景（2026-09-13 审查）：旧写法只有「风起 / 风停」两个瞬间同步 BGM，
+    //  本局结算完全靠 Main.handleMiniGameEnd 停这首 BGM；一旦结算当帧玩家还按着 E
+    //  （浏览器会连发 keydown），世界里的「采药点」路标会被再触发一次 → 小游戏被重开，
+    //  玩家以为已经退出，实际这首 BGM 过一会儿又响、风停时角色若在虚空上还会再判一次
+    //  fail()（于是听感就是「胜利音效 → 起风 BGM → BGM 停 → 失败音效」）。
+    //  这里把收尾责任放回小游戏自己：结算 / 退出都必须先停掉自己的 BGM。
+
+    /** 成功结算：先收掉起风 BGM（同一局只结算一次，重复调用不会再停别的音乐） */
+    complete() {
+        const settled = super.complete();
+        if (settled) this._stopWindBgm();
+        return settled;
+    }
+
+    /**
+     * 失败结算（坠落 / 到点）
+     * 需求：只要检测到本局胜利（isWinLocked），失败一律忽略 —— 不结算、不播失败音效。
+     * 对应玩家反馈的「乘风采药胜利后同时听到胜利和失败音效」。
+     */
+    fail() {
+        if (this.isWinLocked) return false;   // 已采齐 → 本局的失败判定全部作废
+        const settled = super.fail();
+        if (settled) this._stopWindBgm();
+        return settled;
+    }
+
+    /** 退出（MiniGameManager.endCurrentMiniGame 等路径）：先收掉起风 BGM */
+    exit() {
+        this._stopWindBgm();
+        return super.exit();
+    }
 }

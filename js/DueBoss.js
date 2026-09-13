@@ -1710,6 +1710,8 @@ class DueBoss {
         );
 
         this.playAnimation('dash', false);
+        // 冲刺音效：与冲刺动画同一时刻
+        this._playSfx('sfx.boss_due_dash');
     }
 
     /**
@@ -1759,6 +1761,8 @@ class DueBoss {
         if (target && target.position) this.facePoint(target.position);
 
         this.playAnimation('control', false);
+        // 控制音效：与控制动画同一时刻（真正命中玩家是在动画播完后，另有锁链表现）
+        this._playSfx('sfx.boss_due_control');
     }
 
     /** 控制推进：动画播完 → 施加控制（只施加一次） */
@@ -1791,6 +1795,8 @@ class DueBoss {
         if (target && target.position) this.facePoint(target.position);
 
         this.playAnimation('summon', false);
+        // 召唤音效：与召唤动画同一时刻
+        this._playSfx('sfx.boss_due_summon');
     }
 
     /** 召唤推进：动画播完 → 生成小兵 */
@@ -1910,6 +1916,9 @@ class DueBoss {
 
         this.changeAction('dead', 0);
         this.playAnimation('dead', false);
+
+        // 战败音效：与战败动画同一时刻
+        this._playSfx('sfx.boss_due_defeat');
 
         console.log('[渡厄使] 战败');
     }
@@ -2051,6 +2060,27 @@ class DueBoss {
 
     // ==================== 伤害结算 ====================
 
+    // ==================== 音效 ====================
+
+    /**
+     * 播放一次音效（缺失音频文件时静默跳过，不影响战斗逻辑）
+     * 音频键 / 文件路径见 js/ResourceManager.js，触发时机见 tools/音频资源清单.txt
+     * @param {string} key
+     * @returns {boolean}
+     */
+    _playSfx(key) {
+        return gameAudio.playSfx(key);
+    }
+
+    /**
+     * 播放一次音效，但「同一音效正在播放时跳过这一次」（受伤音效用）
+     * @param {string} key
+     * @returns {boolean}
+     */
+    _playSfxExclusive(key) {
+        return gameAudio.playSfxExclusive(key);
+    }
+
     /**
      * 受到伤害
      * - 冲刺中：照常掉血，但不播放受击动画、不中断冲刺
@@ -2073,9 +2103,13 @@ class DueBoss {
         if (this.onDamageTaken) this.onDamageTaken(this, actualDamage, source);
 
         if (this.health <= 0) {
+            // 这一击致命 → 由 enterDead 播战败音效（与战败动画同步，不再叠受伤音效）
             this.enterDead();
             return true;
         }
+
+        // 受伤音效：每次受伤都播；受伤音效正在播放时这一次不播（不叠加）
+        this._playSfxExclusive('sfx.boss_due_hurt');
 
         // 打断规则
         if (this.action === 'dash' || this.action === 'hurt') {

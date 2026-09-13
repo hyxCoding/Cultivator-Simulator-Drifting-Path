@@ -15,6 +15,11 @@ class GameWorldScene extends Scene {
         if (this.main.currentMap) {
             this.main.currentMap.activate();
         }
+
+        // 背景音乐：首次进入（从开始界面）立即播主图 BGM；返回大地图 → 10 秒后再播
+        if (this.main && typeof this.main.onGameWorldSceneEnter === 'function') {
+            this.main.onGameWorldSceneEnter();
+        }
     }
 
     exit() {
@@ -23,6 +28,11 @@ class GameWorldScene extends Scene {
         // 停用当前地图
         if (this.main.currentMap) {
             this.main.currentMap.deactivate();
+        }
+
+        // 背景音乐：离开大地图（进小游戏 / 战斗 / 完结界面）→ 主图 BGM 立即停
+        if (this.main && typeof this.main.onGameWorldSceneExit === 'function') {
+            this.main.onGameWorldSceneExit();
         }
     }
 }

@@ -5,6 +5,9 @@
  *   $env:ELECTRON_RUN_AS_NODE='1'
  *   & 'D:\Microsoft VS Code\Code.exe' tools\smoke_chapter_end.js
  *
+ * 想把输出存成文件比对 / 归档（PowerShell 的 > 抓不到 Code.exe 的控制台输出）：
+ *   & 'D:\Microsoft VS Code\Code.exe' tools\smoke_capture.js tools\smoke_chapter_end.js tools\ce_result.txt
+ *
  * 覆盖范围：
  *   1) 加载 game.html 中列出的全部 js（语法 + 加载期逻辑）
  *   2) 筑基气场精灵图规格（384×128，1 行 8 帧 48×128）与 CombatEffect.isSpriteUsable 判定
@@ -18,7 +21,8 @@
  *        自动接取《桥边寻阿禾》（不含 open_profession_selection）
  *      - 阿禾告别 on_complete → 码头 (2566,1419) 生成永久登船路标 + 接取《登船辞行》
  *        → 按 E 登船开启世界地图
- *   6) 世界地图：M 键打开/关闭（调试期恢复）；地图已删减为前两章，世界地图只保留
+ *   6) 世界地图：M 键入口已删除（第十三次改动）—— 按 M 什么都不发生，开图只走剧情入口
+ *      （章末登船 / 完结后续登船 openWorldMapFromBerth）；地图已删减为前两章，世界地图只保留
  *      青岚浮野 / 云渡泽两个传送按钮且都常开；落地固定坐标（Main.worldMapSpawnPoints）：
  *      青岚浮野 (2718, 1500) / 云渡泽 (541, 1385)，两点均核对过可站；
  *      频繁传送时另一张地图静默（不更新 / 不渲染），但实例与资源不释放（切回复用同一实例）
@@ -58,6 +62,7 @@
  *      改为两张美术贴图 —— assets/images/ui/start_screen.png（1280×720 整屏背景）
  *      + assets/images/ui/start_button.png（400×112，画布正中显示）；
  *      只有点击按钮的 400×112 矩形才开始游戏（键盘 / 按钮外点击都不再开始）；
+ *      悬停时按钮图片平滑上浮（只改渲染位置 renderX / renderY，逻辑热区仍是 (440,304,400×112)）；
  *      缺图（ResourceManager 品红占位图）时只铺底色，不画占位块
  *  18) 游戏完结界面（章末二 · 中央泊位登船后的滚动字幕）：
  *      - 文案 js/EndingText.js（281 行，正文 141 + 空行 140，每行 ≤ 25 字）
@@ -334,12 +339,12 @@ async function main() {
         results.breakthroughOnComplete);
     check('筑基完成 → 记录 foundation_trial_done 标记', results.afterBreakthrough.flagFoundationTrialDone === true);
     check('筑基完成 → 境界提升为筑基', results.afterBreakthrough.realm === 'zhuji', results.afterBreakthrough.realm);
-    check('筑基完成 → 数值写满：气血 200/200、灵息 100/100（Main.applyFoundationRealmStats）',
+    check('筑基完成 → 数值写满：气血 400/400、灵息 250/250（Main.applyFoundationRealmStats）',
         results.afterBreakthrough.playerStats.realm === 'zhuji'
-        && results.afterBreakthrough.playerStats.maxHealth === 200
-        && results.afterBreakthrough.playerStats.health === 200
-        && results.afterBreakthrough.playerStats.maxMana === 100
-        && results.afterBreakthrough.playerStats.mana === 100,
+        && results.afterBreakthrough.playerStats.maxHealth === 400
+        && results.afterBreakthrough.playerStats.health === 400
+        && results.afterBreakthrough.playerStats.maxMana === 250
+        && results.afterBreakthrough.playerStats.mana === 250,
         results.afterBreakthrough.playerStats);
     check('筑基完成 → chapter1_ending_1 完结（触发阿禾迁码头）',
         results.afterBreakthrough.ending1Completed === true);
@@ -434,13 +439,16 @@ async function main() {
             + '（当前回退程序化木牌）', true);
     }
 
-    section('7. 世界地图：M 键打开/关闭 + 只保留前两章传送按钮（调试期常开）');
-    check('按 M 打开世界地图（MapTeleport 显示）',
-        results.mKey.openCalls.length === 1 && results.mKey.opened === true, results.mKey);
-    check('再按 M 关闭世界地图', results.mKey.closed === true, results.mKey);
-    check('战场内按 M 不打开世界地图（避免战场流程停摆 / Boss 白打）',
+    section('7. 世界地图：M 键已移除（只剩剧情入口）+ 只保留前两章传送按钮（常开）');
+    check('按 M 不再打开 / 关闭世界地图（第十三次改动：键盘调试入口已删除，MapTeleport 零调用）',
+        results.mKey.calls.length === 0 && results.mKey.blocked === true
+        && results.mKey.visibleAfter === false, results.mKey);
+    check('战场内按 M 同样毫无反应（M 不再影响战场流程，也就不存在「开图让战场停摆」）',
         results.mKeyBlockedInArena.calls.length === 0 && results.mKeyBlockedInArena.opened === false,
         results.mKeyBlockedInArena);
+    check('世界地图的剧情入口保留：章末登船仍能打开（openWorldMapFromBerth → MapTeleport.show）',
+        results.worldMapStoryEntry.calls.join(',') === 'show'
+        && results.worldMapStoryEntry.visible === true, results.worldMapStoryEntry);
 
     // 静态检查：世界地图区域按钮只剩青岚浮野 / 云渡泽，且都 enabled: true、都走统一入口
     const mainJsText = fs.readFileSync(path.join(ROOT, 'js', 'Main.js'), 'utf8');
@@ -514,7 +522,7 @@ async function main() {
     check('世界地图打开时按 Q 不会打开任务栏', results.overlay.questUIOpenedByQ === false, results.overlay);
     check('世界地图打开时按 E 不触发交互', results.overlay.interactionTriggered === 0, results.overlay);
 
-    section('9. 调试代码清理 + 数值核对（玩家 100/50、灵息每 2 秒回 1、Boss 300、法阵门控）');
+    section('9. 调试代码清理 + 数值核对（玩家 150/70、灵息每秒回 2、Boss 300、法阵门控）');
     const debugCheatsPath = path.join(ROOT, 'js', 'DebugCheats.js');
     check('调试文件 js/DebugCheats.js 已删除', fs.existsSync(debugCheatsPath) === false, debugCheatsPath);
     check('game.html 不再引用调试脚本',
@@ -535,36 +543,55 @@ async function main() {
     check('主线四完成后法阵仍显示（可重复挑战）', results.numeric.teleportVisibleWhenCompleted === true,
         results.numeric.teleportVisibleWhenCompleted);
 
-    check('练气境界：气血上限 100 / 灵息上限 50',
-        results.numeric.realmMaxHealth === 100 && results.numeric.realmMaxMana === 50,
+    check('练气境界：气血上限 150 / 灵息上限 70',
+        results.numeric.realmMaxHealth === 150 && results.numeric.realmMaxMana === 70,
         { maxHealth: results.numeric.realmMaxHealth, maxMana: results.numeric.realmMaxMana });
-    check('玩家建号即为满值：气血 100/100，灵息 50/50',
-        results.numeric.freshPlayerHealth === 100 && results.numeric.freshPlayerMaxHealth === 100
-        && results.numeric.freshPlayerMana === 50 && results.numeric.freshPlayerMaxMana === 50,
+    check('玩家建号即为满值：气血 150/150，灵息 70/70',
+        results.numeric.freshPlayerHealth === 150 && results.numeric.freshPlayerMaxHealth === 150
+        && results.numeric.freshPlayerMana === 70 && results.numeric.freshPlayerMaxMana === 70,
         {
             health: results.numeric.freshPlayerHealth, maxHealth: results.numeric.freshPlayerMaxHealth,
             mana: results.numeric.freshPlayerMana, maxMana: results.numeric.freshPlayerMaxMana,
         });
 
-    check('灵息自然恢复配置：每 2 秒 1 点（GameConfig.combat.manaRegen）',
-        !!results.numeric.manaRegenConfig && results.numeric.manaRegenConfig.interval === 2
-        && results.numeric.manaRegenConfig.amount === 1,
+    check('灵息自然恢复：按境界分档 —— 练气 每秒 2 点（顶层兜底值）',
+        !!results.numeric.manaRegenConfig && results.numeric.manaRegenConfig.interval === 1
+        && results.numeric.manaRegenConfig.amount === 2,
         results.numeric.manaRegenConfig);
-    check('灵息恢复按间隔结算：1.9 秒仍 0 点 → 满 2 秒 +1 点 → 6 秒共 3 点',
-        results.numeric.regenAt1p9 === 0 && results.numeric.regenAt2 === 1 && results.numeric.regenAt6 === 3,
-        { t1p9: results.numeric.regenAt1p9, t2: results.numeric.regenAt2, t6: results.numeric.regenAt6 });
-    check('长时间挂机：灵息封顶在 maxMana（50）不溢出，计时器清零',
-        results.numeric.regenCapped === 50 && results.numeric.regenTimerAtCap === 0,
+    check('灵息自然恢复分档表：练气 1 秒 2 点 / 筑基 1 秒 4 点 / 结丹 1 秒 10 点',
+        !!results.numeric.manaRegenByRealm
+        && results.numeric.manaRegenByRealm.lianqi.interval === 1
+        && results.numeric.manaRegenByRealm.lianqi.amount === 2
+        && results.numeric.manaRegenByRealm.zhuji.interval === 1
+        && results.numeric.manaRegenByRealm.zhuji.amount === 4
+        && results.numeric.manaRegenByRealm.jiedan.interval === 1
+        && results.numeric.manaRegenByRealm.jiedan.amount === 10,
+        results.numeric.manaRegenByRealm);
+    check('灵息恢复按间隔结算：0.9 秒仍 0 点 → 满 1 秒 +2 点 → 5 秒共 10 点',
+        results.numeric.regenAt0p9 === 0 && results.numeric.regenAt1 === 2 && results.numeric.regenAt5 === 10,
+        { t0p9: results.numeric.regenAt0p9, t1: results.numeric.regenAt1, t5: results.numeric.regenAt5 });
+    check('筑基（1 秒 4 点）：0.9 秒 0 点 → 1 秒 4 点 → 3 秒 12 点',
+        results.numeric.zhujiRegenAt0p9 === 0 && results.numeric.zhujiRegenAt1 === 4
+        && results.numeric.zhujiRegenAt3 === 12,
+        {
+            at0p9: results.numeric.zhujiRegenAt0p9, at1: results.numeric.zhujiRegenAt1,
+            at3: results.numeric.zhujiRegenAt3,
+        });
+    check('结丹（1 秒 10 点）：1 秒 10 点 → 2.5 秒 20 点',
+        results.numeric.jiedanRegenAt1 === 10 && results.numeric.jiedanRegenAt2p5 === 20,
+        { at1: results.numeric.jiedanRegenAt1, at2p5: results.numeric.jiedanRegenAt2p5 });
+    check('长时间挂机：灵息封顶在 maxMana（70）不溢出，计时器清零',
+        results.numeric.regenCapped === 70 && results.numeric.regenTimerAtCap === 0,
         { mana: results.numeric.regenCapped, timer: results.numeric.regenTimerAtCap });
 
-    check('筑基境界配置：气血上限 200 / 灵息上限 100',
-        results.numeric.zhujiMaxHealth === 200 && results.numeric.zhujiMaxMana === 100,
+    check('筑基境界配置：气血上限 400 / 灵息上限 250',
+        results.numeric.zhujiMaxHealth === 400 && results.numeric.zhujiMaxMana === 250,
         { maxHealth: results.numeric.zhujiMaxHealth, maxMana: results.numeric.zhujiMaxMana });
-    check('筑基突破（Player.breakthrough）：上限 200/100 并把残血残灵息直接回满',
+    check('筑基突破（Player.breakthrough）：上限 400/250 并把残血残灵息直接回满',
         results.numeric.breakthroughAdvanced === true
         && results.numeric.breakthroughRealm === 'zhuji'
-        && results.numeric.breakthroughMaxHealth === 200 && results.numeric.breakthroughMaxMana === 100
-        && results.numeric.breakthroughHealth === 200 && results.numeric.breakthroughMana === 100,
+        && results.numeric.breakthroughMaxHealth === 400 && results.numeric.breakthroughMaxMana === 250
+        && results.numeric.breakthroughHealth === 400 && results.numeric.breakthroughMana === 250,
         {
             advanced: results.numeric.breakthroughAdvanced, realm: results.numeric.breakthroughRealm,
             health: results.numeric.breakthroughHealth, maxHealth: results.numeric.breakthroughMaxHealth,
@@ -655,6 +682,26 @@ async function main() {
     check('归途法阵永久存在且不重复生成',
         arena.secondEntry.stillActive === true && arena.secondEntry.exitArrayCount === 1,
         arena.secondEntry);
+
+    // ---- 11b. 战败清场（第十三次改动）：被 Boss 打死 → 清技能效果 + 所有技能冷却清 0 ----
+    // 需求：「玩家与 boss 战斗中死亡后，清除自身的技能效果，如闪避技能的加速、护身术的伤害减免，
+    //       同时将所有技能的冷却时长清 0」。走真实 Main.returnFromBossArena 链路
+    //       （PlayerCombatSystem.resetOnDeath，见 runner 同名探针）。
+    const dr = results.deathReset;
+    check('战败回到法阵旁走真实链路（returnFromBossArena 返回 true，并复活玩家）',
+        dr.returned === true && dr.after.alive === true, dr);
+    check('战败清场：护身术减伤去掉（受伤倍率回到 1）+ 闪避加速去掉（移速回到境界基准）',
+        dr.before.reduction < 1 && dr.after.damageMultiplier === 1
+        && dr.before.speed > dr.after.speed && dr.after.speed === dr.after.baseSpeed
+        && dr.after.buffs.hutishu === 0 && dr.after.buffs.dodge === 0,
+        { before: dr.before, after: dr.after });
+    check('战败清场：所有技能冷却清 0（普攻 / 灵息弹 / 护体术 / 闪避 / 剑影连斩）',
+        dr.before.cooldowns.dodge === 51 && dr.before.cooldowns.hutishu === 22
+        && dr.after.allCooldownsZero === true, dr.after.cooldowns);
+    check('战败清场：气场特效一并收掉 + 受伤僵直 / 施法残留清空',
+        dr.after.hutishuAura === null && dr.after.dodgeAura === null
+        && dr.after.hurtLock === 0 && dr.after.casting === null
+        && dr.after.playerHurtLocked === false && dr.after.playerCasting === false, dr.after);
 
     section('12. 自定义气血条 / 灵息条（纯图片绘制：先内条后外框，条上无数字）');
     const bars = results.bars;

@@ -7,8 +7,9 @@
  *   2) WASD / 方向键走位；靠近未点亮的魂灯会出现「[E] 点亮魂灯」提示，按 E 点亮。
  *      魂灯点亮后不可再被熄灭（也不能重复点亮）。
  *   3) 记录点亮顺序（依次点 1、2、3、4 → "1234"）。每次进入小游戏都会在 1234 的
- *      24 种全排列里随机抽一个作为本次「目标灯序」，灯序面板里可反复查看
- *      （showTargetOrder = false 即变成纯记忆玩法）。
+ *      24 种全排列里随机抽一个作为本次「目标灯序」。**屏幕上不再显示目标灯序**
+ *      （第十三次改动，2026-09-13：删除顶部的点灯顺序提示）—— 玩家只能靠每次比对给出的
+ *      「有 N 盏灯亮的位置是对的」反馈推理出灯序（见 _evaluateRound / maxAttempts）。
  *   4) 四盏全亮时比对灯序：
  *        · 完全一致 → complete()：退出小游戏、对话框跳出主角的自言自语（T03），
  *          Main 同时推进主线二「在认灯台完成身份核对」。
@@ -82,7 +83,8 @@ class LanternIdentifyMiniGame extends MiniGame {
      * @param {Object} config
      * @param {number} [config.maxAttempts=3]         机会数（默认 3）
      * @param {number} [config.lanternOffset=200]     魂灯离地图中心的距离（像素）
-     * @param {boolean} [config.showTargetOrder=true] 是否常显目标灯序
+     * 注：目标灯序不再由配置控制显示（第十三次改动删掉了「顶部点灯顺序提示」），
+     *     故原「是否常显目标灯序」的配置字段一并移除。
      */
     constructor(config = {}) {
         super({
@@ -113,8 +115,7 @@ class LanternIdentifyMiniGame extends MiniGame {
 
         // ========== 规则 ==========
         this.maxAttempts = config.maxAttempts !== undefined ? config.maxAttempts : 3;
-        this.showTargetOrder = config.showTargetOrder !== undefined ? config.showTargetOrder : true;
-        this.targetOrder = [];     // 本次目标灯序（1234 的全排列）
+        this.targetOrder = [];     // 本次目标灯序（1234 的全排列；不显示在屏幕上，见文件头说明 3）
         this.litOrder = [];        // 玩家点亮顺序
         this.attemptsLeft = this.maxAttempts;
         this.round = 1;            // 第几次尝试
@@ -511,11 +512,8 @@ class LanternIdentifyMiniGame extends MiniGame {
         return correct;
     }
 
-    /** 目标灯序文本（如 "3 → 1 → 4 → 2"；隐去时返回 "？"） */
-    getTargetOrderText() {
-        if (!this.showTargetOrder) return '？';
-        return this.targetOrder.length ? this.targetOrder.join(' → ') : '？';
-    }
+    // 注：原「目标灯序文本」方法随「顶部点灯顺序提示」一起删除（第十三次改动）：
+    //     屏幕上不再输出目标灯序，targetOrder 只用于结算比对（countCorrectPositions / _evaluateRound）。
 
     /** 已点亮的灯序文本（如 "1 2"；还没点亮时返回 "—"） */
     getLitOrderText() {
@@ -532,11 +530,13 @@ class LanternIdentifyMiniGame extends MiniGame {
      * 读输入：移动键沿用第一章小游戏的写法；E 必须「本帧刚按下」，且一次按下只能点亮一盏灯。
      *
      * 为什么不能只看 input.pressedKeys.e ——
-     *   小游戏每帧会被更新两次（MiniGameScene.update 一次、Main.updateMiniGame 一次），
+     *   历史上小游戏每帧会被驱动两次（MiniGameScene.update 一次、Main.updateMiniGame 一次），
      *   而 inputManager.clearFrameState() 在帧末才清 pressedKeys：同一份 pressedKeys.e
      *   会被读两遍。灯序点错时第 4 盏正是刚点亮的那盏，玩家还站在它旁边（nearbyLantern 又算回它），
      *   于是第二次更新立刻把它重新点亮 —— 看起来就是「第 4 盏灯没被熄灭」。
      *   按住 E 不放时同理（keys.e 一直是 true），连发/长按都可能被当成新的一次按下。
+     *   （第十三次改动已让 Main.update 不再重复驱动小游戏 → 每帧只更新一次；
+     *     这里的两个标记继续保留：它同时管住「按住不放的连发 keydown」。）
      *
      * 这里用两个标记把「一次真实按下」圈死：
      *   · eArmed —— 只有出现过一帧「E 没按下」才会重新武装；一次按下只放行一次点亮
@@ -672,6 +672,8 @@ class LanternIdentifyMiniGame extends MiniGame {
         this.lastCorrectCount = -1;
         this.flashTimer = 0.35;
         this.nearbyLantern = null;
+        // 亮灯音效：每点亮一盏魂灯播一次（缺失音频文件时静默跳过）
+        gameAudio.playSfx('sfx.minigame_lantern_light');
         if (this._allLit()) this._evaluateRound();
     }
 
@@ -734,6 +736,8 @@ class LanternIdentifyMiniGame extends MiniGame {
             litOrder: this.litOrder.slice(),
             targetOrder: this.targetOrder.slice(),
         };
+        // 灭灯音效：猜错但还有机会（这一局到此为止的那次不播，见上方两个 return）
+        gameAudio.playSfx('sfx.minigame_lantern_extinguish');
         this._extinguishAll();
         this.round = this.maxAttempts - this.attemptsLeft + 1;
         if (this.onAttemptFailed) this.onAttemptFailed(info);
@@ -1016,7 +1020,7 @@ class LanternIdentifyMiniGame extends MiniGame {
         ctx.fillText(text, tx, ty);
         ctx.restore();
     }
-    /** HUD：左上机会与进度、顶部目标灯序、中下反馈、底部操作说明 */
+    /** HUD：左上机会与进度、中下反馈、底部操作说明（目标灯序不再显示 —— 第十三次改动） */
     _renderHUD(ctx) {
         const litCount = this.lanterns.filter(lantern => lantern.lit).length;
 
@@ -1047,30 +1051,18 @@ class LanternIdentifyMiniGame extends MiniGame {
         );
         ctx.fillText('已点亮 ' + litCount + '/' + this.lanterns.length + '　灯序：' + this.getLitOrderText(), 40, 96);
 
-        // ---- 顶部中央：目标灯序 ----
-        const orderText = this.showTargetOrder
-            ? ('目标灯序：' + this.getTargetOrderText())
-            : '目标灯序：已隐去（凭记忆点亮）';
-        ctx.font = 'bold 20px Microsoft YaHei';
-        const panelWidth = Math.max(340, ctx.measureText(orderText).width + 44);
-        const panelX = (1280 - panelWidth) / 2;
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-        ctx.beginPath();
-        if (typeof ctx.roundRect === 'function') ctx.roundRect(panelX, 18, panelWidth, 44, 10);
-        else ctx.rect(panelX, 18, panelWidth, 44);
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(240, 208, 128, 0.4)';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-
-        ctx.textAlign = 'center';
-        ctx.fillStyle = this.showTargetOrder ? '#ffe08a' : 'rgba(200, 214, 224, 0.85)';
-        ctx.fillText(orderText, 640, 41);
+        // ---- 顶部中央：目标灯序面板已按需求删除（第十三次改动，2026-09-13）----
+        // 旧写法在这里常显「目标灯序：3 → 1 → 4 → 2」（或隐去时提示「凭记忆点亮」）。
+        // 需求要「删除认灯归魂小游戏顶部的点灯顺序提示」，因此整块面板连同它依赖的
+        // 配置字段与取文本的方法一并移除：屏幕不再透露目标灯序，
+        // 只保留左上角的「我方点亮进度」与中下方的比对反馈。
 
         // ---- 反馈（顺序不对 / 机会用尽 / 成功） ----
         // feedbackPersistent = 失败提示常驻：一直显示到下一次结算换掉它、或本局结束
         if (this.feedback && (this.feedbackTimer > 0 || this.feedbackPersistent || !this.isRunning)) {
             ctx.font = 'bold 18px Microsoft YaHei';
+            // 文本对齐：顶部灯序面板删除后这里要自己设回居中（上面画左侧进度时用的是 left）
+            ctx.textAlign = 'center';
             const textWidth = ctx.measureText(this.feedback).width + 44;
             const boxX = (1280 - textWidth) / 2;
             const boxY = 560;

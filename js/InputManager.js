@@ -208,9 +208,10 @@ class InputManager {
             ...this.keyMappings.skill2,
             ...this.keyMappings.skill3,
             ...this.keyMappings.ultimate,
-            // 界面 / 调试快捷键：世界地图（M，见 Main.handleKeyDown）、碰撞覆盖层（F2）
+            // 界面 / 调试快捷键：碰撞覆盖层（F2，见 Main / 各小游戏的 debugCollision）
             // 不写进 keyMappings —— 旧存档反序列化会整体覆盖 keyMappings，写死可避免缺字段
-            'm', 'f2',
+            // 注：M 键（世界地图）已按需求移除（第十三次改动）→ 不再需要阻止默认行为
+            'f2',
         ];
         
         return allGameKeys.includes(key);
@@ -314,6 +315,22 @@ class InputManager {
     }
 
     /**
+     * 当前是否「完全阻止游戏输入」（移动 / 战斗 / 交互 / 键盘全部无效）
+     *
+     * 调用方（设置方）见 Main.startArenaControlLock（渡厄使「控制」禁键）、
+     * Main.startFoundationTrial / startCoreFormationTrial（筑基 / 结丹调息）、
+     * EndingScene.enter（完结字幕）。
+     *
+     * ⚠ 这里必须提供读取入口：只写不读会让「封锁输入」变成只禁移动的半吊子状态 ——
+     * 被锁住时按 J/U/I/L/O 仍然照常出招并播技能音效、按 Q 仍然开关任务栏（还带音效），
+     * 玩家听到声音、以为操作生效了，实际该状态下什么按键都应当无响应。
+     * @returns {boolean}
+     */
+    isInputBlocked() {
+        return this.inputBlocked === true;
+    }
+
+    /**
      * 设置是否阻止移动输入
      */
     setMovementBlocked(blocked) {
@@ -342,6 +359,27 @@ class InputManager {
         this.releasedKeys = {};
         this.mouseClicked = false;
         this.mouseReleased = false;
+    }
+
+    /**
+     * 清空「按住不放」的按键状态（不依赖 keyup 事件）
+     *
+     * 用途：进小游戏那一刻把主图残留的方向键放掉 —— 玩家在大地图按着 WASD（或方向键）时按 E
+     * 进小游戏，那份「按住」状态会被小游戏读走：角色一进局就被主图的操作推着走
+     * （乘风采药里会直接飘到虚空瓦片上，风一停就坠落判失败）。
+     * 清空后必须**重新按下**才生效（浏览器对按住不放的键连发 keydown 带 repeat = true，
+     * 本类在 handleKeyDown 里直接忽略，不会把 keys 又刷回 true）。
+     * @returns {number} 被清掉的按键数量（便于调试 / 冒烟断言）
+     */
+    clearHeldKeys() {
+        let cleared = 0;
+        for (const key of Object.keys(this.keys)) {
+            if (this.keys[key]) {
+                this.keys[key] = false;
+                cleared++;
+            }
+        }
+        return cleared;
     }
 
     /**

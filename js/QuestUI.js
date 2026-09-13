@@ -367,6 +367,8 @@ class QuestUI {
      */
     show() {
         this.isVisible = true;
+        // 任务栏开 / 关音效（开、关是同一个音效）
+        gameAudio.playSfx('sfx.ui_quest_panel');
     }
 
     /**
@@ -374,6 +376,8 @@ class QuestUI {
      */
     hide() {
         this.isVisible = false;
+        // 任务栏开 / 关音效（开、关是同一个音效）
+        gameAudio.playSfx('sfx.ui_quest_panel');
     }
 
     /**

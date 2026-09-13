@@ -101,6 +101,11 @@ class UIButton {
         if (!isInside && wasHovered && this.onHoverExit) {
             this.onHoverExit(this);
         }
+
+        // 鼠标滑过按钮音效（每次放到按钮上播一次）
+        if (isInside && !wasHovered) {
+            gameAudio.playSfx('sfx.ui_hover');
+        }
         
         // 更新按下状态
         if (isInside && mousePressed) {
@@ -115,8 +120,12 @@ class UIButton {
         }
         
         // 点击处理
-        if (isInside && mouseClicked && this.callback) {
-            this.callback(this);
+        if (isInside && mouseClicked) {
+            // 按钮点击音效（所有按钮通用）
+            gameAudio.playSfx('sfx.ui_click');
+            if (this.callback) {
+                this.callback(this);
+            }
         }
         
         // 更新悬停偏移动画

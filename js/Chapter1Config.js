@@ -428,22 +428,22 @@ class Chapter1Config {
 
     static getQuestConfigs() {
         return {
-            main_1: { id: 'chapter1_main_1', title: '醒在风里', description: '从风灾中醒来，学习基本操作。', type: 'main', chapter: 1, order: 1, prerequisites: [], giver: 'ahe', receiver: 'qibo', objectives: [{ type: 'find_item', target: 'guixiang_pai', count: 1, description: '找回归乡牌' }, { type: 'talk_to', target: 'qibo', count: 1, description: '向祁伯学习基础功法' }, { type: 'complete_training', target: 'basic', count: 1, description: '完成基础操作教学' }, { type: 'talk_to', target: 'qibo', count: 1, description: '向祁伯汇报进度' }], rewards: { exp: 30, lingShi: 50, basicSkillPoints: 1, items: [], skills: ['lingxidan','hutishu'] }, nextQuest: 'chapter1_main_2' },
-            main_2: { id: 'chapter1_main_2', title: '一盏安身灯', description: '帮助阿禾采药并救治伤员。', type: 'main', chapter: 1, order: 2, prerequisites: ['chapter1_main_1'], giver: 'ahe', receiver: 'ahe', objectives: [{ type: 'collect_item', target: 'lingcao', count: 3, description: '乘风采药取得止风草三份' }, { type: 'complete_minigame', target: 'breath_control', count: 1, description: '完成定息引气' }, { type: 'talk_to', target: 'ahe', count: 1, description: '返回阿禾交付' }], rewards: { exp: 30, lingShi: 100, basicSkillPoints: 1, items: ['huiyuan_dan','huiyuan_dan','huiyuan_dan','huiling_dan','huiling_dan'], skills: ['huixishu'], recipes: ['huiyuan_dan','huiling_dan'] }, consumes: { lingcao: 3 }, nextQuest: 'chapter1_main_3' },
-            main_3: { id: 'chapter1_main_3', title: '散落的炊烟', description: '调查风灾的真相。', type: 'main', chapter: 1, order: 3, prerequisites: ['chapter1_main_2'], giver: 'qibo', receiver: 'qibo', objectives: [{ type: 'talk_to', target: 'ayan', count: 1, description: '询问阿砚目击证词' }, { type: 'talk_to', target: 'liushen', count: 1, description: '询问柳婶周叔去向' }, { type: 'rescue', target: 'zhoushu', count: 1, description: '救回周叔' }, { type: 'talk_to', target: 'zhoushu', count: 1, description: '与获救后的周叔交谈（问出镇风桩的异样）' }, { type: 'investigate', target: 'zhenfeng_pile_1', count: 1, description: '调查第一根镇风桩' }, { type: 'investigate', target: 'zhenfeng_pile_2', count: 1, description: '调查第二根镇风桩' }, { type: 'investigate', target: 'zhenfeng_pile_3', count: 1, description: '调查第三根镇风桩' }, { type: 'investigate', target: 'broken_lantern_box', count: 1, description: '调查桩旁的破损运灯箱' }, { type: 'find_item', target: 'hundeng', count: 1, description: '拾取箱前的空魂灯' }, { type: 'talk_to', target: 'qibo', count: 1, description: '回祁伯处交付（桩上异样与残页线索）' }], rewards: { exp: 40, lingShi: 150, basicSkillPoints: 1, items: [] }, nextQuest: 'chapter1_main_4' },
-            main_4: { id: 'chapter1_main_4', title: '山口不止风', description: '击败被阵核控制的摄风山魈。', type: 'main', chapter: 1, order: 4, prerequisites: ['chapter1_main_3'], giver: 'qibo', receiver: 'qibo', objectives: [{ type: 'defeat_boss', target: 'boss_shanxiao', count: 1, description: '进入法阵，击败摄风山魈' }, { type: 'find_item', target: 'zhenhe', count: 1, description: '拾取法阵旁的阵核' }, { type: 'find_item', target: 'mingce', count: 1, description: '拾取法阵旁的名册匣' }, { type: 'talk_to', target: 'qibo', count: 1, description: '向祁伯交付' }], rewards: { exp: 0, lingShi: 0, items: [], storyItems: ['yunduze_route'] }, nextQuest: 'chapter1_ending_1' },
+            main_1: { id: 'chapter1_main_1', title: '醒在风里', description: '从风灾中醒来，学习基本操作。', type: 'main', chapter: 1, order: 1, prerequisites: [], giver: 'ahe', receiver: 'qibo', objectives: [{ type: 'find_item', target: 'guixiang_pai', count: 1, description: '找回归乡牌' }, { type: 'talk_to', target: 'qibo', count: 1, description: '向祁伯学习基础功法' }, { type: 'complete_training', target: 'basic', count: 1, description: '完成基础操作教学' }, { type: 'talk_to', target: 'qibo', count: 1, description: '向祁伯汇报进度' }], nextQuest: 'chapter1_main_2' },
+            main_2: { id: 'chapter1_main_2', title: '一盏安身灯', description: '帮助阿禾采药并救治伤员。', type: 'main', chapter: 1, order: 2, prerequisites: ['chapter1_main_1'], giver: 'ahe', receiver: 'ahe', objectives: [{ type: 'collect_item', target: 'lingcao', count: 3, description: '乘风采药取得止风草三份' }, { type: 'complete_minigame', target: 'breath_control', count: 1, description: '完成定息引气' }, { type: 'talk_to', target: 'ahe', count: 1, description: '返回阿禾交付' }], consumes: { lingcao: 3 }, nextQuest: 'chapter1_main_3' },
+            main_3: { id: 'chapter1_main_3', title: '散落的炊烟', description: '调查风灾的真相。', type: 'main', chapter: 1, order: 3, prerequisites: ['chapter1_main_2'], giver: 'qibo', receiver: 'qibo', objectives: [{ type: 'talk_to', target: 'ayan', count: 1, description: '询问阿砚目击证词' }, { type: 'talk_to', target: 'liushen', count: 1, description: '询问柳婶周叔去向' }, { type: 'rescue', target: 'zhoushu', count: 1, description: '救回周叔' }, { type: 'talk_to', target: 'zhoushu', count: 1, description: '与获救后的周叔交谈（问出镇风桩的异样）' }, { type: 'investigate', target: 'zhenfeng_pile_1', count: 1, description: '调查第一根镇风桩' }, { type: 'investigate', target: 'zhenfeng_pile_2', count: 1, description: '调查第二根镇风桩' }, { type: 'investigate', target: 'zhenfeng_pile_3', count: 1, description: '调查第三根镇风桩' }, { type: 'investigate', target: 'broken_lantern_box', count: 1, description: '调查桩旁的破损运灯箱' }, { type: 'find_item', target: 'hundeng', count: 1, description: '拾取箱前的空魂灯' }, { type: 'talk_to', target: 'qibo', count: 1, description: '回祁伯处交付（桩上异样与残页线索）' }], nextQuest: 'chapter1_main_4' },
+            main_4: { id: 'chapter1_main_4', title: '山口不止风', description: '击败被阵核控制的摄风山魈。', type: 'main', chapter: 1, order: 4, prerequisites: ['chapter1_main_3'], giver: 'qibo', receiver: 'qibo', objectives: [{ type: 'defeat_boss', target: 'boss_shanxiao', count: 1, description: '进入法阵，击败摄风山魈' }, { type: 'find_item', target: 'zhenhe', count: 1, description: '拾取法阵旁的阵核' }, { type: 'find_item', target: 'mingce', count: 1, description: '拾取法阵旁的名册匣' }, { type: 'talk_to', target: 'qibo', count: 1, description: '向祁伯交付' }], nextQuest: 'chapter1_ending_1' },
             // ===== 章末（六、章末：筑基 → 桥边寻阿禾 → 登船）=====
             // ending_1：与祁伯对话选择“开始筑基”→ Main.startFoundationTrial 播放筑基调息（禁键 / 主角朝下 / 背后气场 5 秒）
             //            → 续接 breakthrough_success → on_complete 里的 complete_foundation_trial 推进本任务的
             //            complete_foundation_trial 目标（目标完成后 Main.onQuestComplete 会把阿禾迁到码头）。
-            ending_1: { id: 'chapter1_ending_1', title: '筑基调息', description: '在祁伯的护持下收拢灵气，完成筑基。', type: 'main', chapter: 1, order: 5, prerequisites: ['chapter1_main_4'], giver: 'qibo', receiver: 'qibo', objectives: [{ type: 'complete_foundation_trial', target: 'foundation', count: 1, description: '在祁伯旁完成筑基调息' }], rewards: { exp: 0, lingShi: 0, items: [] }, nextQuest: 'chapter1_ending_2' },
+            ending_1: { id: 'chapter1_ending_1', title: '筑基调息', description: '在祁伯的护持下收拢灵气，完成筑基。', type: 'main', chapter: 1, order: 5, prerequisites: ['chapter1_main_4'], giver: 'qibo', receiver: 'qibo', objectives: [{ type: 'complete_foundation_trial', target: 'foundation', count: 1, description: '在祁伯旁完成筑基调息' }], nextQuest: 'chapter1_ending_2' },
             // ending_2：筑基调息结束后由 breakthrough_success 的 on_complete: accept_quest_chapter1_ending_2 生成，
             //            提示玩家去长桥码头找阿禾（阿禾在 ending_1 完成时已迁到码头告别位 81,44）。
             //            与阿禾对话（talk_to ahe）即完结本任务。
-            ending_2: { id: 'chapter1_ending_2', title: '桥边寻阿禾', description: '阿禾已带着名册去了长桥码头，去那里找她。', type: 'main', chapter: 1, order: 6, prerequisites: ['chapter1_ending_1'], giver: 'ahe', receiver: 'ahe', objectives: [{ type: 'talk_to', target: 'ahe', count: 1, description: '到长桥码头找阿禾' }], rewards: { exp: 0, lingShi: 0, items: [] }, nextQuest: 'chapter1_ending_3' },
+            ending_2: { id: 'chapter1_ending_2', title: '桥边寻阿禾', description: '阿禾已带着名册去了长桥码头，去那里找她。', type: 'main', chapter: 1, order: 6, prerequisites: ['chapter1_ending_1'], giver: 'ahe', receiver: 'ahe', objectives: [{ type: 'talk_to', target: 'ahe', count: 1, description: '到长桥码头找阿禾' }], nextQuest: 'chapter1_ending_3' },
             // ending_3：阿禾 farewell 对话结束（on_complete: create_depart_signpost / accept_quest_chapter1_ending_3）后生成登船路标，
             //            按 E 登船（board_boat）即完结本任务并切到世界地图（第一章结束）。
-            ending_3: { id: 'chapter1_ending_3', title: '登船辞行', description: '与码头边的阿禾核对名册，登船前往云渡泽。', type: 'main', chapter: 1, order: 7, prerequisites: ['chapter1_ending_2'], giver: 'ahe', receiver: 'ahe', objectives: [{ type: 'board_boat', target: 'depart_boat', count: 1, description: '在长码头登船离开青岚浮野' }], rewards: { exp: 0, lingShi: 0, items: [] }, nextQuest: null },
+            ending_3: { id: 'chapter1_ending_3', title: '登船辞行', description: '与码头边的阿禾核对名册，登船前往云渡泽。', type: 'main', chapter: 1, order: 7, prerequisites: ['chapter1_ending_2'], giver: 'ahe', receiver: 'ahe', objectives: [{ type: 'board_boat', target: 'depart_boat', count: 1, description: '在长码头登船离开青岚浮野' }], nextQuest: null },
         };
     }
 
@@ -664,6 +664,10 @@ class Chapter1Config {
                         questRequired: 'chapter1_main_2',       // 接取 M02 任务后路标才可见
                         gameId: 'herb_collect',
                         oneShot: false,
+                        // 小游戏「成功退出」后的收尾对白（乘风采药采齐草药 → 回主图说一句）
+                        // 行首带「说话人: 」的行按该说话人显示；文本里的换行按转义分行，读完按 J / 点击推进
+                        successDialogue: '止风草齐了三份，趁着露水还重，赶紧给阿禾送去。\n风里走这一趟不算白——好歹没让这些药草空长一场。',
+                        successSpeaker: '主角: ',
                     },
                 },
                 // === 章末（筑基调息 → 阿禾移至码头送别 → 登船） ===
@@ -713,12 +717,26 @@ class Chapter1Config {
                         anchor: 'center',
                         questRequired: 'chapter1_main_4',     // 接取主线四后才生成/可见
                         bossArena: true,                      // 走战场流程（记录返回点）
+                        // === 战败成长（Boss 失败补偿）===
+                        // 每次在摄风山魈战场战败 → 气血上限 +20 / 灵息上限 +10，
+                        // 最多结算 5 次（第 6 次起不再提升）；累计值随存档保存。
+                        // 由 Main.returnFromBossArena → Main.applyBossFailureBonus 结算。
+                        arenaDefeatBonus: { id: 'boss_shanxiao', maxHealth: 20, maxMana: 10, maxFailures: 5 },
                     },
                 },
                 // === 入口点（左下牌坊附近） ===
                 entryPoint: { x: 16, y: 43 },
                 ambientConfig: {
-                    fallingLeaves: { enabled: true, spawnRate: 0.8, maxCount: 40 },
+                    // 飘落物（落叶 / 落花）：青岚浮野是本章主图 → 开启（只有前两章主图会显示，
+                    // 战场 / 小游戏 / 世界地图都不会，见 js/FallingFoliage.js 的 isFoliageMap）
+                    // maxCount = 界面中同时存在的最大飘落物数量（调它控疏密）
+                    fallingFoliage: {
+                        enabled: true,
+                        maxCount: 22,
+                        spawnRate: 1.2,
+                        leafWeight: 0.7,   // 青岚浮野：落叶为主
+                        flowerWeight: 0.3,
+                    },
                     fog: { enabled: false },
                 },
             },

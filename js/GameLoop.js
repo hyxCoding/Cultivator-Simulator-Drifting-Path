@@ -234,9 +234,10 @@ class GameLoop {
             });
         }
 
-        // 6. 更新地图场景动画（落叶、飘动等环境效果）
+        // 6. 更新地图场景动画（飘落物（落叶 / 落花）、飘动等环境效果）
+        //    camera 传下去：飘落物按摄像机视口生成 → 同屏数量稳定（见 GameMap.getFoliageArea）
         if (this.currentMap && this.currentMap.updateSceneAnimations) {
-            this.currentMap.updateSceneAnimations(deltaTime);
+            this.currentMap.updateSceneAnimations(deltaTime, this.camera);
         }
         
         // 6. 更新摄像机

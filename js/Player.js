@@ -329,7 +329,7 @@ class Player {
         
         // 更新无敌状态
         this.updateInvincibility(deltaTime);
-        // 灵息自然恢复（默认每 2 秒 1 点；数值见 GameConfig.combat.manaRegen）
+        // 灵息自然恢复（默认每秒 2 点；数值见 GameConfig.combat.manaRegen）
         this.updateManaRegen(deltaTime);
 
         // 更新攻击状态
@@ -382,10 +382,11 @@ class Player {
         this.playerData.updatePlayTime(deltaTime);
     }
     /**
-     * 灵息自然恢复：每 interval 秒恢复 amount 点（默认 2 秒 1 点）
+     * 灵息自然恢复：按当前境界分档，每 interval 秒恢复 amount 点
+     *   练气 每 1 秒 2 点 → 筑基 每 1 秒 4 点 → 结丹（及以后）每 1 秒 10 点
      * - 不看移动 / 普攻 / 闪避，也不受教学或战斗状态影响，只要活着就恢复；
      * - 灵息已满时把累计计时清零（不做溢出储存），避免满值后白攒出一发；
-     * - 数值来源：GameConfig.combat.manaRegen（缺配置时按 2 秒 1 点兜底）；
+     * - 数值来源：GameConfig.combat.manaRegen.byRealm[当前境界]（缺档时回落到顶层 1 秒 2 点）；
      * - 气血不自然恢复（只有丹药 / 剧情回复，见 Player.heal）。
      * @param {number} deltaTime - 时间增量（秒）
      */
@@ -394,8 +395,11 @@ class Player {
 
         const gameConfig = GameConfig.getInstance();
         const regen = (typeof gameConfig.get === 'function' && gameConfig.get('combat.manaRegen')) || {};
-        const interval = regen.interval > 0 ? regen.interval : 2;
-        const amount = regen.amount > 0 ? regen.amount : 1;
+        // 按境界取档（练气 1 秒 2 点 / 筑基 1 秒 4 点 / 结丹 1 秒 10 点），缺档回落顶层兜底值
+        const realmId = (this.playerData && this.playerData.realm) || 'lianqi';
+        const entry = (regen.byRealm && regen.byRealm[realmId]) || regen;
+        const interval = entry.interval > 0 ? entry.interval : 1;
+        const amount = entry.amount > 0 ? entry.amount : 2;
 
         const data = this.playerData;
         if (data.mana >= data.maxMana) {
@@ -823,6 +827,11 @@ class Player {
         const actualDamage = this.professionSystem.calculateDamageTaken(damage * incomingMultiplier);
         this.playerData.health -= actualDamage;
 
+        // 受伤音效：每次受伤都播一次；若受伤音效正在播放，则这一次不播（不叠加）
+        // （音频键与文件路径见 ResourceManager → assets/audio/sfx/player_hurt.mp3；
+        //   文件缺失时 AudioManager 静默跳过）
+        gameAudio.playSfxExclusive('sfx.player_hurt');
+
         // 受伤表现：护体术 / 闪避期间不播放受伤动画（也不进入受伤僵直）；
         // 施法（灵息弹攻击动画）中受伤 → 终止施法、冷却重置、不消耗灵息
         if (combatSystem && typeof combatSystem.onPlayerHurt === 'function') {
@@ -960,6 +969,12 @@ class Player {
             this.playerData.maxMana = realmConfig.maxMana;
             this.playerData.health = realmConfig.maxHealth;
             this.playerData.mana = realmConfig.maxMana;
+            // Boss 战败成长：累计加成叠加在境界基准值之上（无战败成长时等于基准值），
+            // 并按新上限回满气血 / 灵息（与境界突破同一语义）
+            this.playerData.maxHealth += this.playerData.maxHealthBonus || 0;
+            this.playerData.maxMana += this.playerData.maxManaBonus || 0;
+            this.playerData.health = this.playerData.maxHealth;
+            this.playerData.mana = this.playerData.maxMana;
             this.moveSpeed = this.getCurrentMoveSpeed();
             
             return true;

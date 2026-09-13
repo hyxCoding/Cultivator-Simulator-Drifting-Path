@@ -5,8 +5,10 @@
  * 鼠标悬停时按钮图片上移，实现选中提示效果
  *
  * 打开方式（见 js/Main.js）：
- *   - 调试期：M 键开关（Main.handleKeyDown → mapTeleport.toggle()），ESC 也可关闭
- *   - 剧情：第一章码头登船（Main.boardShipAndOpenWorldMap → show()）
+ *   - 剧情：第一章码头登船（Main.boardShipAndOpenWorldMap → show()）、
+ *          章末登船（Main.openWorldMapFromBerth → show()）
+ *   - 关闭：ESC（Main.handleEscapeKey → hide()）
+ *   - 注：调试期的 M 键开关已按需求移除（第十三次改动，2026-09-13）—— 键盘上不再有世界地图入口
  * 地图已删减为前两章，区域按钮只有青岚浮野 / 云渡泽两个（调试期均常开，点击即传送）
  */
 class MapTeleport {
@@ -247,7 +249,7 @@ class MapTeleport {
         ctx.textAlign = 'right';
         ctx.textBaseline = 'bottom';
         ctx.fillText(
-            '按 M / ESC 关闭地图',
+            '按 ESC 关闭地图',
             this.canvasWidth - 20,
             this.canvasHeight - 20
         );

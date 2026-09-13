@@ -376,6 +376,16 @@ class ResourceManager {
                 lanternBoxes: {
                     broken_lantern_box: 'assets/images/lantern_box/broken_lantern_box.png',
                 },
+                // === 飘落物（落叶 / 落花；环境特效，见 js/FallingFoliage.js）===
+                // 规格：1 行 12 帧，单帧 16×16（整图 192×16），循环播放。
+                // 只在前两章主图（GameMap 的 FallingFoliage.isFoliageMap 白名单：qinglan_fuye / yunduze）
+                // 与开始界面 / 游戏完结界面显示；小游戏、Boss 战场、世界地图都不显示。
+                // 缺图 / 尺寸不符（含 ResourceManager 的 32×32 品红占位图）→ 程序化叶片 / 花瓣兜底。
+                // 生成 / 覆盖占位图：py -3 tools/generate_foliage_assets.py（--force 覆盖，--check 只校验）
+                foliage: {
+                    falling_leaf: 'assets/images/foliage/falling_leaf.png',
+                    falling_flower: 'assets/images/foliage/falling_flower.png',
+                },
                 // === 战斗特效（Boss 技能表现：叠加在 Boss 之上绘制） ===
                 effects: {
                     // 扑击落地扬尘：1 行 6 帧，单帧 48×48
@@ -440,49 +450,56 @@ class ResourceManager {
             },
             
             audio: {
-                // === 背景音乐 ===
+                // ============================================================
+                // 音频资源（背景音乐 = 循环播放；音效 = 单次播放）
+                // 播放统一由 js/AudioManager.js 负责；文件缺失 / 名称不符时静默跳过，
+                // 不会导致游戏报错（把音频文件按下面路径放进去即可生效）。
+                // 完整地址清单（键 / 路径 / 循环与否 / 触发时机）见 tools/音频资源清单.txt
+                // ============================================================
+
+                // === 背景音乐（循环播放）===
                 bgm: {
-                    main_menu: 'assets/audio/bgm/main_menu.mp3',
-                    qinglan: 'assets/audio/bgm/qinglan.mp3',
-                    yunduze: 'assets/audio/bgm/yunduze.mp3',
-                    zhaochen: 'assets/audio/bgm/zhaochen.mp3',
-                    wuxiang: 'assets/audio/bgm/wuxiang.mp3',
-                    boss_fight: 'assets/audio/bgm/boss_fight.mp3',
-                    final_boss: 'assets/audio/bgm/final_boss.mp3',
-                    ending: 'assets/audio/bgm/ending.mp3',
+                    main_menu: 'assets/audio/bgm/main_menu.mp3',           // 开始游戏界面（加载完即播，点开始即停）
+                    qinglan: 'assets/audio/bgm/qinglan.mp3',               // 第一章主图 青岚浮野（回主图 10 秒后起播）
+                    yunduze: 'assets/audio/bgm/yunduze.mp3',               // 第二章主图 云渡泽（同上）
+                    minigame_boat: 'assets/audio/bgm/minigame_boat.mp3',   // 逆流送灯小游戏（开局即播 / 结束即停）
+                    minigame_herb: 'assets/audio/bgm/minigame_herb.mp3',   // 乘风采药小游戏（只在起风期间循环）
+                    ending: 'assets/audio/bgm/ending.mp3',                 // 游戏结束滚动字幕（退出界面才停）
                 },
-                
-                // === 音效 ===
+
+                // === 音效（单次播放）===
                 sfx: {
-                    // 界面音效
-                    ui_click: 'assets/audio/sfx/ui_click.mp3',
-                    ui_hover: 'assets/audio/sfx/ui_hover.mp3',
-                    ui_confirm: 'assets/audio/sfx/ui_confirm.mp3',
-                    ui_cancel: 'assets/audio/sfx/ui_cancel.mp3',
-                    // 战斗音效
-                    battle_attack: 'assets/audio/sfx/battle_attack.mp3',
-                    battle_hit: 'assets/audio/sfx/battle_hit.mp3',
-                    battle_skill: 'assets/audio/sfx/battle_skill.mp3',
-                    battle_hurt: 'assets/audio/sfx/battle_hurt.mp3',
-                    battle_dead: 'assets/audio/sfx/battle_dead.mp3',
-                    battle_levelup: 'assets/audio/sfx/battle_levelup.mp3',
-                    // 移动音效
-                    move_footstep: 'assets/audio/sfx/move_footstep.mp3',
-                    move_jump: 'assets/audio/sfx/move_jump.mp3',
-                    // 环境音效
-                    env_wind: 'assets/audio/sfx/env_wind.mp3',
-                    env_water: 'assets/audio/sfx/env_water.mp3',
-                    // 小游戏音效
-                    game_success: 'assets/audio/sfx/game_success.mp3',
-                    game_fail: 'assets/audio/sfx/game_fail.mp3',
-                    //其他音效
-                    env_fire: 'assets/audio/sfx/env_fire.mp3',
-                    env_thunder: 'assets/audio/sfx/env_thunder.mp3',
-                    env_bell: 'assets/audio/sfx/env_bell.mp3',
-                    breakthrough: 'assets/audio/sfx/breakthrough.mp3',
-                    teleport: 'assets/audio/sfx/teleport.mp3',
-                    item_use: 'assets/audio/sfx/item_use.mp3',
-                    quest_complete: 'assets/audio/sfx/quest_complete.mp3',
+                    // --- 玩家（技能 / 攻击真的发动才播；受伤音效不叠加）---
+                    player_attack: 'assets/audio/sfx/player_attack.mp3',         // J 普通攻击
+                    player_lingxidan: 'assets/audio/sfx/player_lingxidan.mp3',   // U 灵息弹（与释放动画同一时刻）
+                    player_hutishu: 'assets/audio/sfx/player_hutishu.mp3',       // I 护体术
+                    player_dodge: 'assets/audio/sfx/player_dodge.mp3',           // L 闪避
+                    player_jianying: 'assets/audio/sfx/player_jianying.mp3',     // O 剑影连斩
+                    player_hurt: 'assets/audio/sfx/player_hurt.mp3',             // 玩家受伤（正在播时不重播）
+                    pickup: 'assets/audio/sfx/pickup.mp3',                       // 拾取任务道具 / 乘风采药采到草药
+                    // --- 摄风山魈（第一章 Boss）---
+                    boss_shanxiao_charge: 'assets/audio/sfx/boss_shanxiao_charge.mp3',   // 蓄力（与蓄力动画同步）
+                    boss_shanxiao_sweep: 'assets/audio/sfx/boss_shanxiao_sweep.mp3',     // 横扫（与横扫动画同步）
+                    boss_shanxiao_pounce: 'assets/audio/sfx/boss_shanxiao_pounce.mp3',   // 扑击（与扑击动画同步）
+                    boss_shanxiao_slam: 'assets/audio/sfx/boss_shanxiao_slam.mp3',       // 扑击落地砸地（与扬尘特效同步）
+                    boss_shanxiao_hurt: 'assets/audio/sfx/boss_shanxiao_hurt.mp3',       // 受伤（正在播时不重播）
+                    boss_shanxiao_defeat: 'assets/audio/sfx/boss_shanxiao_defeat.mp3',   // 战败（与战败动画同步）
+                    // --- 渡厄使（第二章 Boss）---
+                    boss_due_summon: 'assets/audio/sfx/boss_due_summon.mp3',     // 召唤（与召唤动画同步）
+                    boss_due_dash: 'assets/audio/sfx/boss_due_dash.mp3',         // 冲刺（与冲刺动画同步）
+                    boss_due_control: 'assets/audio/sfx/boss_due_control.mp3',   // 控制（与控制动画同步）
+                    boss_due_hurt: 'assets/audio/sfx/boss_due_hurt.mp3',         // 受伤（正在播时不重播）
+                    boss_due_defeat: 'assets/audio/sfx/boss_due_defeat.mp3',     // 战败（与战败动画同步）
+                    // --- UI（所有按钮通用）---
+                    ui_hover: 'assets/audio/sfx/ui_hover.mp3',               // 鼠标每次放到按钮上
+                    ui_click: 'assets/audio/sfx/ui_click.mp3',               // 鼠标点击按钮
+                    ui_quest_panel: 'assets/audio/sfx/ui_quest_panel.mp3',   // 任务栏开 / 关（同一个音效）
+                    // --- 小游戏（认灯归魂）---
+                    minigame_lantern_light: 'assets/audio/sfx/minigame_lantern_light.mp3',            // 每点亮一盏魂灯
+                    minigame_lantern_extinguish: 'assets/audio/sfx/minigame_lantern_extinguish.mp3',  // 猜错且还有机会 → 灭灯
+                    // --- 胜负 ---
+                    victory: 'assets/audio/sfx/victory.mp3',   // 小游戏成功 / 打败 Boss 并走归途法阵回原位置
+                    defeat: 'assets/audio/sfx/defeat.mp3',     // 小游戏失败 / 被 Boss 打败
                 },
             },
         };
@@ -499,13 +516,29 @@ class ResourceManager {
                     'ui.start_screen',
                     'ui.start_button',
                 ],
-                audio: [],
+                // 开始游戏界面背景音乐（加载完成后立刻循环，点「开始游戏」立刻停）
+                audio: [
+                    'bgm.main_menu',
+                ],
             },
             // 游戏完结界面（章末二登船后的滚动字幕）：整屏背景底图，启动时随主菜单一起预加载
             // （见 js/EndingScene.js；缺图时改回程序化「深墨渐变 + 渡口暖光晕」，不影响播放）
             ending: {
                 images: [
                     'ui.ending_bg',
+                ],
+                // 完结界面背景音乐（滚动字幕期间循环，退出界面才停）
+                audio: [
+                    'bgm.ending',
+                ],
+            },
+            // 飘落物（落叶 / 落花）：三处界面共用这两张图（开始界面 / 游戏完结界面 /
+            // 第一·第二章主图），故随启动一起预加载；缺图时走程序化叶片 / 花瓣兜底
+            // （见 js/FallingFoliage.js、js/MainMenuScene.js、js/EndingScene.js、js/GameMap.js）
+            foliage: {
+                images: [
+                    'foliage.falling_leaf',
+                    'foliage.falling_flower',
                 ],
                 audio: [],
             },
@@ -536,7 +569,16 @@ class ResourceManager {
                     'ui.skill_dodge',
                     'ui.skill_jianying',
                 ],
-                audio: [],
+                // 玩家技能音效（技能 / 攻击真的发动时才播；受伤音效正在播时不重播）
+                audio: [
+                    'sfx.player_attack',
+                    'sfx.player_lingxidan',
+                    'sfx.player_hutishu',
+                    'sfx.player_dodge',
+                    'sfx.player_jianying',
+                    'sfx.player_hurt',
+                    'sfx.pickup',
+                ],
             },
             // 主线四：摄风山魈战场（山口石台）
             // 进入战场前预加载；战斗结束时由 ShanxiaoBoss.destroy() 释放，保证二次进场动画完整
@@ -554,7 +596,15 @@ class ResourceManager {
                     'effects.boss_pounce_dust',
                     'effects.boss_charge_wind',
                 ],
-                audio: [],
+                // 摄风山魈音效（蓄力 / 横扫 / 扑击 / 砸地 / 受伤 / 战败）
+                audio: [
+                    'sfx.boss_shanxiao_charge',
+                    'sfx.boss_shanxiao_sweep',
+                    'sfx.boss_shanxiao_pounce',
+                    'sfx.boss_shanxiao_slam',
+                    'sfx.boss_shanxiao_hurt',
+                    'sfx.boss_shanxiao_defeat',
+                ],
             },
             // 第二章：万灯台战场（渡厄使 + 其召唤的小兵 + 控制锁链）
             // 进入战场前预加载；战斗结束时由 DueBoss.destroy() 释放，保证二次进场动画完整
@@ -574,7 +624,14 @@ class ResourceManager {
                     // 控制技：玩家头顶的锁链图（32×32）
                     'effects.boss_due_chain',
                 ],
-                audio: [],
+                // 渡厄使音效（召唤 / 冲刺 / 控制 / 受伤 / 战败）
+                audio: [
+                    'sfx.boss_due_summon',
+                    'sfx.boss_due_dash',
+                    'sfx.boss_due_control',
+                    'sfx.boss_due_hurt',
+                    'sfx.boss_due_defeat',
+                ],
             },
         };
 

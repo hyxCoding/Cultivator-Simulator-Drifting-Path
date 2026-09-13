@@ -13,6 +13,25 @@ class MiniGameScene extends Scene {
             this.main.miniGameManager.startMiniGame(this.gameId);
         }
     }
+
+    /**
+     * 退出小游戏场景 → 清掉「当前小游戏 / 刚结算完成」状态
+     *
+     * 背景（2026-09-13 审查）：MiniGameScene.update 在 isFinished 为真时每帧都会调
+     * Main.handleMiniGameEnd，而 MiniGameManager 里那份状态（currentMiniGame / isFinished）
+     * 此前没有任何地方清理 —— 于是「已结算」的小游戏实例会一直挂在管理器上，
+     * 只要有人再调 startMiniGame，就会被当成一次干净的新开局（旧 bug：结算当帧的 E 键
+     * 经路标重开一局，玩家以为退出了、其实小游戏还在跑）。
+     * 现在退出场景即清空：currentMiniGame=null、isPlaying=false、isFinished=false。
+     * 注意放在 exit（而不是 handleMiniGameEnd 当帧）里清：handleMiniGameEnd 之后、
+     * 场景真正切走之前，渲染仍要用 currentMiniGame 画完最后 1 帧。
+     */
+    exit() {
+        super.exit();
+        if (this.main && this.main.miniGameManager) {
+            this.main.miniGameManager.clearCurrentGame();
+        }
+    }
     
     update(deltaTime, input) {
         super.update(deltaTime, input);

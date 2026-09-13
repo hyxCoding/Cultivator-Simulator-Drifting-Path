@@ -12,6 +12,8 @@
  *     生成 / 覆盖占位图：py -3 tools/generate_ending_assets.py（补图后 Ctrl+F5 生效）；
  *   · 字幕：js/EndingText.js 的整段文字（每行 ≤ 25 字，空行占一个行位）从屏幕**底部逐行上滚**，
  *     每行水平居中，采用楷体 / 宋体优先的「艺术字」字栈，40px、手动字距、暖金色 + 柔光；
+ *   · 飘落物：落叶 / 落花（见 js/FallingFoliage.js），叠在底图与浮尘之上、**字幕之下**，
+ *     数量由 maxCount 控制（默认 14，比主图更淡）；缺图时程序化叶片 / 花瓣兜底；
  *   · 提示：最后一行完全滚出屏幕上方后，屏幕中心淡入「按任意键返回游戏」（带呼吸明暗）。
  *
  * 交互（模态：播放期间世界输入全部封死）：
@@ -19,6 +21,11 @@
  *     Main.handleKeyDown 也对 'ending' 场景直接 return —— 播放中任何键都不生效（不能跳过）；
  *   · 提示出现后，键盘任意键 / 鼠标任意键 → Main.finishGameEnding()：
  *     写入剧情标记 game_ending_seen、打开世界地图（MapTeleport）、切回 gameWorld 场景。
+ *
+ * 音频（见 js/AudioManager.js，音频地址清单见 tools/音频资源清单.txt）：
+ *   · enter：滚动字幕一开始就循环播放 bgm.ending；
+ *   · exit：只有玩家退出本界面时才停止（播放期间不会被打断）；
+ *   · 回大地图后主图 BGM 由 Main.onGameWorldSceneEnter 走「10 秒后起播」。
  *
  * 可调参数（都收在构造函数里）：lineHeight 行距 / fontSize 字号 / scrollSpeed 滚动速度。
  */
@@ -67,6 +74,21 @@ class EndingScene extends Scene {
 
         // ========== 背景浮尘（固定伪随机，避免每帧跳动）==========
         this.dustParticles = this.createDustParticles(70);
+
+        // ========== 飘落物（落叶 / 落花；见 js/FallingFoliage.js）==========
+        // 完结界面也飘落叶 / 落花（小游戏 / Boss 战场 / 世界地图都不显示）
+        // 画在「整屏底 + 浮尘 + 暗角」之上、滚动字幕之下 —— 字幕永远保持最上层、清晰可读
+        // maxCount = 界面中同时存在的最大数量，调它控疏密；贴图与主图 / 开始界面共用
+        this.foliage = new FallingFoliage({
+            name: '游戏完结 飘落物',
+            area: { x: 0, y: 0, width: this.canvasWidth, height: this.canvasHeight },
+            maxCount: 14,
+            spawnRate: 1.0,
+            scale: 2,            // 单帧 16×16 → 显示 32×32
+            leafWeight: 0.5,     // 完结画面：落叶 / 落花各半，更柔和
+            flowerWeight: 0.5,
+            alphaRange: [0.55, 0.9],   // 比主图更淡一点，不干扰字幕
+        });
     }
 
     /**
@@ -117,6 +139,15 @@ class EndingScene extends Scene {
         if (this.main && this.main.player) {
             this.main.player.isInteracting = true;
         }
+
+        // 飘落物：读贴图（三处界面共用同一组图）+ 重新铺场 + 同步画布范围
+        this.foliage.setArea({ x: 0, y: 0, width: this.canvasWidth, height: this.canvasHeight });
+        this.foliage.loadImages(this.main ? this.main.resourceManager : null);
+        this.foliage.reset();
+
+        // 背景音乐：滚动字幕开始播放时立刻循环播放完结 BGM
+        // （只有玩家退出本界面（exit）才停；缺失音频文件时静默跳过）
+        gameAudio.playBgm('bgm.ending');
     }
 
     /**
@@ -131,6 +162,10 @@ class EndingScene extends Scene {
         if (this.main && this.main.player) {
             this.main.player.isInteracting = false;
         }
+
+        // 背景音乐：玩家退出完结界面 → 立刻停掉完结 BGM
+        // （回到大地图后主图 BGM 由 Main.onGameWorldSceneEnter 走 10 秒延迟）
+        gameAudio.stopBgm('bgm.ending');
     }
 
     /**
@@ -240,6 +275,9 @@ class EndingScene extends Scene {
         const dt = (typeof deltaTime === 'number' && deltaTime > 0) ? deltaTime : 0;
         this.time += dt;
 
+        // ---- 0) 飘落物（落叶 / 落花）：无论字幕播到哪一步都在飘 ----
+        this.foliage.update(dt);
+
         // ---- 1) 滚动中：整段一行一行向上走 ----
         if (!this.isFinished) {
             this.scrollOffset -= this.scrollSpeed * dt;
@@ -282,7 +320,7 @@ class EndingScene extends Scene {
     // ==================== 渲染 ====================
 
     /**
-     * 渲染完结界面：深墨背景 → 滚动字幕 → 「按任意键返回游戏」提示
+     * 渲染完结界面：深墨背景 + 飘落物 + 滚动字幕 + 「按任意键返回游戏」提示
      * @param {CanvasRenderingContext2D} ctx - Canvas 上下文
      */
     render(ctx) {
@@ -291,6 +329,11 @@ class EndingScene extends Scene {
         const canvasHeight = this.canvasHeight || 720;
 
         this.renderBackground(ctx, canvasWidth, canvasHeight);
+
+        // 飘落物（落叶 / 落花）：叠在背景（含浮尘 / 暗角）之上、字幕之下
+        if (this.foliage) {
+            this.foliage.render(ctx);
+        }
 
         // 滚动字幕（只画屏幕附近的几行）
         for (let i = 0; i < this.lines.length; i++) {
@@ -435,5 +478,6 @@ class EndingScene extends Scene {
         super.deserialize(data);
         this.lines = this.readLines();
         this.resetScroll();
+        if (this.foliage) this.foliage.reset();   // 飘落物同样从头铺场
     }
 }
