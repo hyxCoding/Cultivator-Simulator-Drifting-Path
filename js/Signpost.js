@@ -73,6 +73,10 @@ class Signpost {
                     return;
                 }
                 this.image = img;
+            }).catch(err => {
+                // Promise 的 rejection 不会被外层 try/catch 捕获（那是同步异常），
+                // 必须显式 catch，否则会变成「未处理的 Promise 拒绝」。加载失败 → 静默回退木牌渲染。
+                console.warn(`[Signpost] 路标图片加载失败，回退到木牌渲染: ${this.imageKey}`, err);
             });
         } catch (e) {
             // 静默失败，后续回退到木牌渲染

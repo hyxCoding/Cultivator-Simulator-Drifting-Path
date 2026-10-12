@@ -265,22 +265,10 @@ class NPC {
         this.setAnimation('heal', { loop: false });
         this.facing = 'down';
 
-        // 动画播放完成后，阿砚切换为站立状态
-        // 估算 heal 动画时长：假设单帧，约1秒
-        const healDuration = 1000;
-
-        setTimeout(() => {
-            // 阿砚切换为站立 idle（锁定动画，不被 updateAnimation 覆盖）
-            ayan.animationOverridden = true;
-            if (ayan.animationManager.hasAnimation('stand_idle')) {
-                ayan.setAnimation('stand_idle', { loop: true });
-                ayan.setNpcState('healed', true);
-                console.log(`[NPC] ${ayan.name} 已被 ${this.name} 治愈，切换为站立动画`);
-            }
-            // 阿禾恢复 idle，解锁动画
-            this.animationOverridden = false;
-            this.setIdleAnimation();
-        }, healDuration);
+        // 动画播放完成后，阿砚切换为站立状态。
+        // 计时随主循环 deltaTime 走（见 updatePendingHeal），不再用 setTimeout。
+        const healDuration = GameConfig.getInstance().getStoryTiming().npcHealSwitchDelay;
+        this._pendingHeal = { target: ayan, timer: healDuration };
     }
 
     // ==================== 更新逻辑 ====================
@@ -321,6 +309,37 @@ class NPC {
         
         // 更新对话系统
         this.dialogueSystem.update(deltaTime);
+
+        // 推进「治疗演出」的待执行步骤（deltaTime 驱动，替代原 setTimeout）
+        this.updatePendingHeal(deltaTime);
+    }
+
+    /**
+     * 推进阿禾治疗演出的延迟步骤（由 update 每帧调用）
+     * 说明：原实现用 setTimeout(1000ms)，与游戏暂停 / 帧率脱钩；改为随主循环计时。
+     * @param {number} deltaTime - 时间增量（秒）
+     */
+    updatePendingHeal(deltaTime) {
+        const pending = this._pendingHeal;
+        if (!pending) return;
+
+        pending.timer -= deltaTime;
+        if (pending.timer > 0) return;
+
+        const ayan = pending.target;
+        this._pendingHeal = null;
+        if (!ayan) return;
+
+        // 阿砚切换为站立 idle（锁定动画，不被 updateAnimation 覆盖）
+        ayan.animationOverridden = true;
+        if (ayan.animationManager && ayan.animationManager.hasAnimation('stand_idle')) {
+            ayan.setAnimation('stand_idle', { loop: true });
+            ayan.setNpcState('healed', true);
+            Logger.log(`[NPC] ${ayan.name} 已被 ${this.name} 治愈，切换为站立动画`);
+        }
+        // 阿禾恢复 idle，解锁动画
+        this.animationOverridden = false;
+        this.setIdleAnimation();
     }
 
     /**
@@ -814,7 +833,7 @@ class NPC {
         this.moveTarget = null;
         this.path = [];
         this.currentPathIndex = 0;
-        console.log(`[NPC] ${this.name} 搬迁至瓦片 (${tileX}, ${tileY}) → 世界 (${Math.round(worldPos.x)}, ${Math.round(worldPos.y)})`);
+        Logger.log(`[NPC] ${this.name} 搬迁至瓦片 (${tileX}, ${tileY}) → 世界 (${Math.round(worldPos.x)}, ${Math.round(worldPos.y)})`);
     }
 
     /**
@@ -834,7 +853,7 @@ class NPC {
         this.currentPathIndex = 0;
         const tile = (map && map.worldToTile) ? map.worldToTile(worldX, worldY) : null;
         const tileInfo = tile ? `（约瓦片 ${tile.x}, ${tile.y}）` : '';
-        console.log(`[NPC] ${this.name} 搬迁至世界坐标 (${Math.round(worldX)}, ${Math.round(worldY)})${tileInfo}`);
+        Logger.log(`[NPC] ${this.name} 搬迁至世界坐标 (${Math.round(worldX)}, ${Math.round(worldY)})${tileInfo}`);
     }
 
     // ==================== 渲染 ====================

@@ -74,7 +74,7 @@ class MainMenuScene extends Scene {
      */
     enter(params = {}) {
         super.enter(params);
-        console.log('进入主菜单');
+        Logger.log('进入主菜单');
         this.isStarting = false;
         this.isHoveringButton = false;
         this.currentOffsetX = 0;      // 每次进场都从「未悬停」状态开始

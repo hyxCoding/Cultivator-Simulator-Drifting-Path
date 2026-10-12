@@ -8,9 +8,15 @@ class MiniGameScene extends Scene {
     enter(params = {}) {
         super.enter(params);
         this.gameId = params.gameId || null;
+        this.params = params.params || {};
+        this.services = params.services || null;
         
-        if (this.gameId) {
-            this.main.miniGameManager.startMiniGame(this.gameId);
+        // 兜底启动：正常情况下 Main.startMiniGame 已经在切换场景前启动了小游戏
+        // （此时 isPlaying 已为 true，这里不会重复启动）。保留这一条是为了让
+        // 「直接 switchScene('miniGame', {gameId, params})」这类路径也能独立工作。
+        if (this.gameId && this.main && this.main.miniGameManager
+            && !this.main.miniGameManager.isPlaying) {
+            this.main.miniGameManager.startMiniGame(this.gameId, this.params, this.services);
         }
     }
 

@@ -1148,39 +1148,11 @@ class Chapter2Config {
                         worldPosition: { x: 960, y: 180 },
                         monsterId: 'boss_due',
                         ai: 'due',
-                        tuning: {
-                            moveSpeed: 96,           // 追击速度（像素/秒）
-                            aggroRange: 760,         // 仇恨范围
-                            attackStopRange: 130,    // 进入该距离即停止追击，准备出手
-                            keepDistance: 84,        // 与玩家保持的最小距离
-                            maxMoveTime: 2.4,        // 单次追击最长持续时间（秒）
-                            minMoveTime: 0.4,        // 单次追击最短持续时间（秒）
-                            idleDuration: 0.6,       // 待机最短持续时间（秒）
-                            decisionInterval: 0.15,  // 行为树评估间隔（秒）
-                            // 冲刺（不可打断，动画结束圆形判定）
-                            dashSpeed: 520,
-                            dashRadius: 150,
-                            dashTriggerRange: 440,
-                            cooldownDash: 5,
-                            // 控制（可打断，播完锁玩家按键 3 秒）
-                            controlRange: 340,
-                            controlLockDuration: 3,
-                            cooldownControl: 40,
-                            initialCooldownControl: 6,
-                            // 召唤（可打断，生成小兵，场上最多 2 个）
-                            summonMaxMinions: 2,
-                            cooldownSummon: 60,
-                            initialCooldownSummon: 12,
-                            // 小兵数值（覆盖 DueMinion.DEFAULT_TUNING；血量 / 伤害取 boss_due_minion 配置）
-                            minion: {
-                                moveSpeed: 88,
-                                attackRange: 48,
-                                detectRange: 460,
-                                cooldownAttack: 1.6,
-                                attackRadius: 46,
-                                maxMoveTime: 2.0,
-                            },
-                        },
+                        // tuning —— 可选：只写需要覆盖 DueBoss.DEFAULT_TUNING 的字段
+                        //   （追击/冲刺/控制/召唤/小兵等数值）。本 Boss 全部使用类内默认值，
+                        //   故此处留空——唯一来源见 js/DueBoss.js 的 DueBoss.DEFAULT_TUNING
+                        //   与 DueMinion.DEFAULT_TUNING。
+                        //   如需按章节单独调平衡，在此补 { 字段: 值 }（含 minion: {...} 子对象）即可。
                     },
                 },
                 ambientConfig: {

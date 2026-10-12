@@ -9,37 +9,47 @@ class BattleScene extends Scene {
 
     enter(params = {}) {
         super.enter(params);
-        console.log('进入战斗');
+        Logger.log('进入战斗');
         
         this.player = params.player;
         this.enemies = params.enemies;
         this.battleSystem = params.battleSystem;
     }
 
+    /**
+     * 战斗场景更新 —— **战斗系统的唯一驱动点**
+     *
+     * 每帧由 GameLoop → SceneManager.update → 本方法调用一次。
+     * ⚠ 不可在 Main.update 的 'battle' 分支里再调一次 battleSystem.update：
+     *   两处都驱动会让同一帧推进两遍（回合倒计时 / 敌人行动延迟按 2× 速度走）。
+     *   与 'miniGame' 同一条规则（见 Main.update）。
+     *
+     * @param {number} deltaTime - 时间增量（秒）
+     * @param {Object} input - 输入状态
+     */
     update(deltaTime, input) {
         super.update(deltaTime, input);
-        
-        if (this.battleSystem && this.battleSystem.isInBattle) {
-            this.battleSystem.update(deltaTime);
 
-            if (this.enemies && this.enemies.length > 0) {
-                this.enemies.forEach(enemy => {
-                    if (enemy && enemy.update) {
-                        enemy.update(deltaTime, null);
-                    }
-                });
-            }
+        if (!this.battleSystem || !this.battleSystem.isInBattle) return;
 
-            if (this.player && this.player.isAlive && this.player.isInBattle) {
-                if (input && input.pressedKeys && (input.pressedKeys['j'] || input.pressedKeys[' '])) {
-                    this.player.performAttack();
-                }
+        this.battleSystem.update(deltaTime);
+
+        // 敌人：以 battleSystem.enemies 为准（战斗中动态增删的敌人也能跟上）
+        const enemies = this.battleSystem.enemies || this.enemies || [];
+        for (const enemy of enemies) {
+            if (enemy && enemy.update) {
+                enemy.update(deltaTime, null);
             }
-            
-            // 战斗结束
-            if (!this.battleSystem.isInBattle) {
-                this.main.sceneManager.switchScene('gameWorld');
-            }
+        }
+
+        if (this.player && this.player.isAlive && this.player.isInBattle
+            && input && input.pressedKeys && (input.pressedKeys['j'] || input.pressedKeys[' '])) {
+            this.player.performAttack();
+        }
+
+        // 战斗结束 → 回大地图
+        if (!this.battleSystem.isInBattle) {
+            this.main.sceneManager.switchScene('gameWorld');
         }
     }
 

@@ -31,6 +31,9 @@ class SaveManager {
         this.battleSystem = null;
         this.questUI = null;
         this.dialogBox = null;
+        // 玩家实例：修复（重构）—— 旧版 registerSystems 没有 player，导致角色属性 / 背包 /
+        // 任务 / 职业全部不落盘（读档后变回默认值）。这里补上唯一存档入口。
+        this.player = null;
         
         // 回调
         this.onSaveSuccess = null;  // 保存成功回调 (saveData) => void
@@ -58,6 +61,7 @@ class SaveManager {
         if (systems.battleSystem) this.battleSystem = systems.battleSystem;
         if (systems.questUI) this.questUI = systems.questUI;
         if (systems.dialogBox) this.dialogBox = systems.dialogBox;
+        if (systems.player) this.player = systems.player;
     }
 
     /**
@@ -103,6 +107,10 @@ class SaveManager {
             
             // ========== 对话框状态 ==========
             dialogBox: this.dialogBox ? this.dialogBox.serialize() : null,
+            
+            // ========== 玩家状态（角色属性 / 背包 / 职业 / 任务 / 动画）==========
+            // 修复：此前完全没有收集 player，是存档体系最大的缺口。
+            player: this.player ? this.player.serialize() : null,
         };
         
         return saveData;
@@ -165,6 +173,15 @@ class SaveManager {
             this.dialogBox.deserialize(saveData.dialogBox);
         }
         
+        // 应用玩家状态（角色属性 / 背包 / 职业 / 任务 / 动画）
+        if (saveData.player && this.player) {
+            this.player.deserialize(saveData.player);
+            // 职业系统同步 playerData 引用：境界 / 阶段读取需要它
+            if (this.player.professionSystem && this.player.professionSystem.setPlayerData) {
+                this.player.professionSystem.setPlayerData(this.player.playerData);
+            }
+        }
+        
         return true;
     }
 
@@ -190,7 +207,7 @@ class SaveManager {
                 this.onSaveSuccess(saveData);
             }
             
-            console.log(`[存档] 保存成功 (第${this.saveCount}次) - ${saveData.meta.saveTimeFormatted}`);
+            Logger.log(`[存档] 保存成功 (第${this.saveCount}次) - ${saveData.meta.saveTimeFormatted}`);
             
             return true;
         } catch (error) {
@@ -213,7 +230,7 @@ class SaveManager {
             const jsonString = localStorage.getItem(this.storageKey);
             
             if (!jsonString) {
-                console.log('[存档] 无存档数据');
+                Logger.log('[存档] 无存档数据');
                 return null;
             }
             
@@ -235,7 +252,7 @@ class SaveManager {
                 this.onLoadSuccess(saveData);
             }
             
-            console.log(`[存档] 读取成功 - ${saveData.meta ? saveData.meta.saveTimeFormatted : '未知时间'}`);
+            Logger.log(`[存档] 读取成功 - ${saveData.meta ? saveData.meta.saveTimeFormatted : '未知时间'}`);
             
             return saveData;
         } catch (error) {
@@ -270,7 +287,7 @@ class SaveManager {
             localStorage.removeItem(this.storageKey);
             this.lastSaveTime = null;
             this.saveCount = 0;
-            console.log('[存档] 存档已删除');
+            Logger.log('[存档] 存档已删除');
             return true;
         } catch (error) {
             console.error('[存档] 删除失败:', error);
@@ -361,7 +378,7 @@ class SaveManager {
             // 保存到localStorage
             localStorage.setItem(this.storageKey, jsonString);
             
-            console.log('[存档] 导入成功');
+            Logger.log('[存档] 导入成功');
             
             return true;
         } catch (error) {

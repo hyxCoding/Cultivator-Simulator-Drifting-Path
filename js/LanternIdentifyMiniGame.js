@@ -180,7 +180,6 @@ class LanternIdentifyMiniGame extends MiniGame {
     /** 读图：先取预加载缓存，未命中再异步补一次（缺图 / 占位图 → 保持 null，走程序化绘制） */
     _loadResources() {
         try {
-            const rm = ResourceManager.getInstance();
             const keys = {
                 bg: 'miniGame.rendeng_bg',
                 dark: 'miniGame.rendeng_deng_off',
@@ -192,27 +191,28 @@ class LanternIdentifyMiniGame extends MiniGame {
             const assign = (img, slot, minW, minH) => {
                 if (this._isUsableImage(img, minW, minH)) this[slot] = img;
             };
-            assign(rm.getCachedImage(keys.bg), 'backgroundImage', 320, 180);
-            assign(rm.getCachedImage(keys.dark), 'lanternDarkImage', this.lanternWidth, this.lanternHeight);
-            assign(rm.getCachedImage(keys.lit), 'lanternLitImage', this.lanternWidth, this.lanternHeight);
-            assign(rm.getCachedImage(keys.walk), 'playerImage', this.playerFrameSize, this.playerFrameSize);
-            assign(rm.getCachedImage(keys.idle), 'playerIdleImage', this.playerFrameSize, this.playerFrameSize);
+            // 通过基类服务适配器取图（主游戏未注入服务时回落 ResourceManager 单例）
+            assign(this.getServiceImage(keys.bg), 'backgroundImage', 320, 180);
+            assign(this.getServiceImage(keys.dark), 'lanternDarkImage', this.lanternWidth, this.lanternHeight);
+            assign(this.getServiceImage(keys.lit), 'lanternLitImage', this.lanternWidth, this.lanternHeight);
+            assign(this.getServiceImage(keys.walk), 'playerImage', this.playerFrameSize, this.playerFrameSize);
+            assign(this.getServiceImage(keys.idle), 'playerIdleImage', this.playerFrameSize, this.playerFrameSize);
             // 碰撞图只作数据源（白 = 可走 / 黑 = 阻挡）→ 解析成 32×18 瓦片表
-            assign(rm.getCachedImage(keys.collision), 'collisionImage', this.mapWidth, this.mapHeight);
+            assign(this.getServiceImage(keys.collision), 'collisionImage', this.mapWidth, this.mapHeight);
             this._initCollision();
 
-            rm.loadImage(keys.bg)
+            this.loadServiceImage(keys.bg)
                 .then(img => assign(img, 'backgroundImage', 320, 180)).catch(() => {});
-            rm.loadImage(keys.dark)
+            this.loadServiceImage(keys.dark)
                 .then(img => assign(img, 'lanternDarkImage', this.lanternWidth, this.lanternHeight)).catch(() => {});
-            rm.loadImage(keys.lit)
+            this.loadServiceImage(keys.lit)
                 .then(img => assign(img, 'lanternLitImage', this.lanternWidth, this.lanternHeight)).catch(() => {});
-            rm.loadImage(keys.walk)
+            this.loadServiceImage(keys.walk)
                 .then(img => assign(img, 'playerImage', this.playerFrameSize, this.playerFrameSize)).catch(() => {});
-            rm.loadImage(keys.idle)
+            this.loadServiceImage(keys.idle)
                 .then(img => assign(img, 'playerIdleImage', this.playerFrameSize, this.playerFrameSize)).catch(() => {});
             // 碰撞图未命中缓存（例如实例早于预加载创建）→ 异步补一次并重建碰撞表
-            rm.loadImage(keys.collision)
+            this.loadServiceImage(keys.collision)
                 .then(img => {
                     assign(img, 'collisionImage', this.mapWidth, this.mapHeight);
                     this._initCollision();
@@ -452,9 +452,24 @@ class LanternIdentifyMiniGame extends MiniGame {
         return this.setCollisionDebug(!this.debugCollision);
     }
 
+    /**
+     * 读取启动参数（主游戏在 start 时注入）
+     * maxAttempts：本局允许的尝试次数（默认 3）；lanternOffset / interactRadius 亦可通过参数覆盖。
+     */
+    applyParams(params) {
+        if (!params) return;
+        if (Number.isInteger(params.maxAttempts) && params.maxAttempts > 0) {
+            this.maxAttempts = params.maxAttempts;
+        }
+        if (typeof params.lanternOffset === 'number') {
+            this.lanternOffset = params.lanternOffset;
+            this.lanterns = this._createLanterns();
+        }
+    }
+
     /** 开始 / 重开：抽本次目标灯序、清空点亮记录、机会回到 3 次、玩家回到灯台中心 */
-    start() {
-        super.start();
+    start(params, services) {
+        super.start(params, services);
         this.targetOrder = this._generateTargetOrder();
         this.litOrder = [];
         this.attemptsLeft = this.maxAttempts;
@@ -673,7 +688,7 @@ class LanternIdentifyMiniGame extends MiniGame {
         this.flashTimer = 0.35;
         this.nearbyLantern = null;
         // 亮灯音效：每点亮一盏魂灯播一次（缺失音频文件时静默跳过）
-        gameAudio.playSfx('sfx.minigame_lantern_light');
+        this.playSfx('sfx.minigame_lantern_light');
         if (this._allLit()) this._evaluateRound();
     }
 
@@ -737,7 +752,7 @@ class LanternIdentifyMiniGame extends MiniGame {
             targetOrder: this.targetOrder.slice(),
         };
         // 灭灯音效：猜错但还有机会（这一局到此为止的那次不播，见上方两个 return）
-        gameAudio.playSfx('sfx.minigame_lantern_extinguish');
+        this.playSfx('sfx.minigame_lantern_extinguish');
         this._extinguishAll();
         this.round = this.maxAttempts - this.attemptsLeft + 1;
         if (this.onAttemptFailed) this.onAttemptFailed(info);

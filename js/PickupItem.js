@@ -119,7 +119,7 @@ update(deltaTime) {
         }
         this.isPickedUp = true;
         this.isVisible = false;
-        console.log(`[PickupItem] 拾取: ${this.name} (${this.itemId})`);
+        Logger.log(`[PickupItem] 拾取: ${this.name} (${this.itemId})`);
         if (this.onPickup) this.onPickup(this);
         return true;
     }

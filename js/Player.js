@@ -36,7 +36,9 @@ class Player {
         this.inventory = new Inventory(config.inventory);
         
         // ========== 职业系统 ==========
-        this.professionSystem = new ProfessionSystem(config.profession);
+        // 注入 playerData 引用：职业系统不再「假装」自己是某个境界，而是实时读取玩家的真实境界
+        // （旧实现硬编码返回 'zhuji'，导致练气期就解锁了筑基技能）
+        this.professionSystem = new ProfessionSystem(Object.assign({ playerData: this.playerData }, config.profession));
         
         // ========== 动画系统 ==========
         this.animationManager = config.animationManager || new AnimationManager();
@@ -47,7 +49,10 @@ class Player {
         this.moveDirection = { x: 0, y: 0 };
         
         // ========== 状态 ==========
-        this.isAlive = true;
+        // ★ 状态收敛：isAlive 不再是本类的独立字段，而是转发到 PlayerData 的玩家状态机
+        //   （唯一权威，见下方 get/set isAlive 访问器）。旧实现此处 `this.isAlive = true`
+        //   与 PlayerData 的存亡状态各存一份，die/revive 只改字段、PlayerData.isAlive()
+        //   读状态机 → 二者会漂移。其余交互 / 战斗布尔（瞬时表现，非进度状态）仍留在此处。
         this.isInteracting = false;  // 是否正在交互（对话、商店等）
         this.isInBattle = false;     // 是否在战斗中
         this.isInvincible = false;   // 是否无敌
@@ -59,12 +64,12 @@ class Player {
         this.isAttacking = false;
         this.attackTimer = 0;
 
-        // ========== 闪避相关 ==========
-        this.isDodging = false;
-        this.dodgeCooldown = 0;
-        this.dodgeDuration = 0.25;
-        this.dodgeTimer = 0;
-        this.dodgeSpeed = this.moveSpeed * 3;
+        // ========== 闪避 ==========
+        // 闪避（L 键）由 PlayerCombatSystem.tryDodge 全权负责：灵息消耗 / 冷却 / 瞬移（带碰撞）
+        // / 移速加成 / 气场特效 / 无敌由 combatSystem 管理。
+        // ⚠ 历史：本类曾另有一套 performDodge + isDodging/dodgeTimer/dodgeSpeed/dodgeCooldown
+        //   机制，但 performDodge 从未被调用（isDodging 恒为 false）→ 已删除，避免出现
+        //   两套互相冲突的闪避实现（见第十四次改动）。
         // ========== 灵息自然恢复（每 CONFIG.combat.manaRegen 间隔恢复 amount 点） ==========
         this.manaRegenTimer = 0;     // 自然恢复计时（满灵息时清零，不累积）
 
@@ -95,6 +100,24 @@ class Player {
         
         // ========== 初始化 ==========
         this.initAnimations();
+    }
+
+    // ==================== 存亡状态（委托玩家状态机，唯一权威）====================
+    // 唯一权威 = PlayerData 的玩家状态机（PlayerStateMachine 的 'alive' 状态）。
+    // 本访问器只做转发：读 → 状态机；写 → 状态机（严格校验，非法值被拒绝）。
+    // 全项目任何地方读写玩家存亡都应走这里（或 PlayerData.isAlive() / 状态机本体），
+    // 禁止再在本类或其它模块另存一份布尔。
+
+    /** 是否存活（唯一权威 = 玩家状态机；PlayerData 未就绪时保守返回 true） */
+    get isAlive() {
+        return this.playerData ? this.playerData.isAlive() : true;
+    }
+
+    /** 设置存亡（转发到玩家状态机；非布尔值会被状态机拒绝） */
+    set isAlive(value) {
+        if (this.playerData && typeof this.playerData.getStateMachine === 'function') {
+            this.playerData.getStateMachine().setAlive(value === true);
+        }
     }
 
     // ==================== 动画初始化 ====================
@@ -338,15 +361,9 @@ class Player {
         // 更新受伤僵直 / 闪红（受伤动画期间禁止一切玩家行为输入）
         this.updateHurtState(deltaTime);
         
-        // 处理移动（闪避时由 performDodge 控制冲刺，不响应常规移动输入；受伤僵直期间禁止移动）
-        if (!this.isAttacking && !this.isInteracting && !this.isInBattle && !this.isDodging
-            && !this.isHurtLocked) {
+        // 处理移动（受伤僵直期间禁止移动；闪避位移由 PlayerCombatSystem.tryDodge 直接改坐标）
+        if (!this.isAttacking && !this.isInteracting && !this.isInBattle && !this.isHurtLocked) {
             this.updateMovement(deltaTime, input, map);
-        } else if (this.isDodging) {
-            // 闪避中保持velocity方向，应用碰撞
-            const newX = this.position.x + this.velocity.x * deltaTime;
-            const newY = this.position.y + this.velocity.y * deltaTime;
-            this.moveWithCollision(newX, newY, map);
         }
         
         // 更新交互检测
@@ -360,19 +377,6 @@ class Player {
         // 更新攻击冷却
         if (this.attackCooldown > 0) {
             this.attackCooldown -= deltaTime;
-        }
-
-        // 更新闪避
-        if (this.isDodging) {
-            this.dodgeTimer -= deltaTime;
-            if (this.dodgeTimer <= 0) {
-                this.isDodging = false;
-                this.isInvincible = false;
-                this.invincibleTimer = 0;
-            }
-        }
-        if (this.dodgeCooldown > 0) {
-            this.dodgeCooldown -= deltaTime;
         }
 
         // 更新任务系统
@@ -393,16 +397,14 @@ class Player {
     updateManaRegen(deltaTime) {
         if (!this.isAlive || !this.playerData) return;
 
+        // 唯一数据源：GameConfig.getManaRegen(境界) 统一返回 {interval, amount}，
+        // 缺档自动回落顶层兜底值。旧代码在这里又写了一遍 `> 0 ? ... : 1/2` 的硬编码。
         const gameConfig = GameConfig.getInstance();
-        const regen = (typeof gameConfig.get === 'function' && gameConfig.get('combat.manaRegen')) || {};
-        // 按境界取档（练气 1 秒 2 点 / 筑基 1 秒 4 点 / 结丹 1 秒 10 点），缺档回落顶层兜底值
-        const realmId = (this.playerData && this.playerData.realm) || 'lianqi';
-        const entry = (regen.byRealm && regen.byRealm[realmId]) || regen;
-        const interval = entry.interval > 0 ? entry.interval : 1;
-        const amount = entry.amount > 0 ? entry.amount : 2;
+        const realmId = this.playerData.realm || gameConfig.getDefaultRealmId();
+        const { interval, amount } = gameConfig.getManaRegen(realmId);
 
         const data = this.playerData;
-        if (data.mana >= data.maxMana) {
+        if (data.getMana() >= data.getMaxMana()) {
             this.manaRegenTimer = 0;
             return;
         }
@@ -410,8 +412,8 @@ class Player {
         this.manaRegenTimer = (this.manaRegenTimer || 0) + deltaTime;
         while (this.manaRegenTimer >= interval) {
             this.manaRegenTimer -= interval;
-            data.mana = Math.min(data.maxMana, data.mana + amount);
-            if (data.mana >= data.maxMana) {
+            data.changeMana(amount);
+            if (data.getMana() >= data.getMaxMana()) {
                 this.manaRegenTimer = 0;
                 break;
             }
@@ -704,45 +706,6 @@ class Player {
     }
 
     /**
-     * 执行闪避
-     * 向当前移动方向快速冲刺，期间无敌
-     */
-    performDodge() {
-        if (this.isDodging || this.dodgeCooldown > 0 || !this.isAlive || this.isInteracting) {
-            return false;
-        }
-
-        this.isDodging = true;
-        this.dodgeTimer = this.dodgeDuration;
-        this.dodgeCooldown = 1.0; // 1秒冷却
-
-        // 向当前方向冲刺
-        const dirX = this.moveDirection.x || 0;
-        const dirY = this.moveDirection.y || 0;
-
-        // 如果没有移动方向，默认为朝向方向
-        const dodgeVecX = dirX !== 0 ? dirX : (this.facing === 'right' ? 1 : this.facing === 'left' ? -1 : 0);
-        const dodgeVecY = dirY !== 0 ? dirY : (this.facing === 'down' ? 1 : this.facing === 'up' ? -1 : 0);
-
-        // 归一化
-        const len = Math.sqrt(dodgeVecX * dodgeVecX + dodgeVecY * dodgeVecY);
-        if (len > 0) {
-            this.velocity.x = (dodgeVecX / len) * this.dodgeSpeed;
-            this.velocity.y = (dodgeVecY / len) * this.dodgeSpeed;
-        }
-
-        // 闪避时无敌
-        this.isInvincible = true;
-        this.invincibleTimer = this.dodgeDuration;
-
-        // 播放闪避动画（尝试播放skill动画作为闪避效果）
-        this.animationManager.play('skill', { reset: true, loop: false, direction: this.facing });
-
-        console.log('[Player] 闪避');
-        return true;
-    }
-
-    /**
      * 执行攻击判定
      */
     executeAttack() {
@@ -825,7 +788,8 @@ class Player {
             ? combatSystem.getIncomingDamageMultiplier()
             : 1;
         const actualDamage = this.professionSystem.calculateDamageTaken(damage * incomingMultiplier);
-        this.playerData.health -= actualDamage;
+        // 走 PlayerData 统一入口（自动裁剪到 [0, max] 并同步存亡状态机），不再直接改 health 字段
+        this.playerData.changeHealth(-actualDamage);
 
         // 受伤音效：每次受伤都播一次；若受伤音效正在播放，则这一次不播（不叠加）
         // （音频键与文件路径见 ResourceManager → assets/audio/sfx/player_hurt.mp3；
@@ -848,8 +812,7 @@ class Player {
         this.isInvincible = true;
         this.invincibleTimer = 0.5;
         
-        if (this.playerData.health <= 0) {
-            this.playerData.health = 0;
+        if (this.playerData.getHealth() <= 0) {
             this.die();
         }
         
@@ -861,10 +824,7 @@ class Player {
      */
     heal(amount) {
         if (!this.isAlive) return;
-        this.playerData.health = Math.min(
-            this.playerData.health + amount,
-            this.playerData.maxHealth
-        );
+        this.playerData.changeHealth(amount);
     }
 
     /**
@@ -872,10 +832,7 @@ class Player {
      */
     restoreMana(amount) {
         if (!this.isAlive) return;
-        this.playerData.mana = Math.min(
-            this.playerData.mana + amount,
-            this.playerData.maxMana
-        );
+        this.playerData.changeMana(amount);
     }
 
     /**
@@ -901,10 +858,9 @@ class Player {
     revive(position) {
         this.isAlive = true;
         this.position = position || this.position;
-        this.playerData.health = this.playerData.maxHealth;
-        this.playerData.mana = this.playerData.maxMana;
+        this.playerData.refill();
         this.isInvincible = true;
-        this.invincibleTimer = 2;
+        this.invincibleTimer = GameConfig.getInstance().getPlayerCombatBase().invincibleOnRevive;
         
         this.playIdleAnimation();
     }
@@ -925,11 +881,11 @@ class Player {
         
         switch (itemConfig.effect) {
             case 'restore_health_percent':
-                const healAmount = this.playerData.maxHealth * (itemConfig.value / 100);
+                const healAmount = this.playerData.getMaxHealth() * (itemConfig.value / 100);
                 this.heal(healAmount);
                 break;
             case 'restore_mana_percent':
-                const manaAmount = this.playerData.maxMana * (itemConfig.value / 100);
+                const manaAmount = this.playerData.getMaxMana() * (itemConfig.value / 100);
                 this.restoreMana(manaAmount);
                 break;
             default:
@@ -956,25 +912,12 @@ class Player {
      */
     breakthrough() {
         const gameConfig = GameConfig.getInstance();
-        const realmOrder = ['lianqi', 'zhuji', 'jiedan', 'yuanying', 'huashen'];
-        const currentIndex = realmOrder.indexOf(this.playerData.realm);
+        // 境界顺序取自唯一常量源（GameConfig.realmOrder），不再本地写一份数组
+        const nextRealm = gameConfig.getNextRealm(this.playerData.realm);
         
-        if (currentIndex < realmOrder.length - 1 && this.playerData.stage === '圆满') {
-            const newRealm = realmOrder[currentIndex + 1];
-            const realmConfig = gameConfig.getRealm(newRealm);
-            
-            this.playerData.realm = newRealm;
-            this.playerData.stage = realmConfig.stages[0];
-            this.playerData.maxHealth = realmConfig.maxHealth;
-            this.playerData.maxMana = realmConfig.maxMana;
-            this.playerData.health = realmConfig.maxHealth;
-            this.playerData.mana = realmConfig.maxMana;
-            // Boss 战败成长：累计加成叠加在境界基准值之上（无战败成长时等于基准值），
-            // 并按新上限回满气血 / 灵息（与境界突破同一语义）
-            this.playerData.maxHealth += this.playerData.maxHealthBonus || 0;
-            this.playerData.maxMana += this.playerData.maxManaBonus || 0;
-            this.playerData.health = this.playerData.maxHealth;
-            this.playerData.mana = this.playerData.maxMana;
+        if (nextRealm && this.playerData.stage === '圆满') {
+            // 上限 = 境界基准值 + Boss 战败成长加成，并按新上限回满（统一走 PlayerData.applyRealmStats）
+            this.playerData.applyRealmStats(nextRealm);
             this.moveSpeed = this.getCurrentMoveSpeed();
             
             return true;
@@ -989,7 +932,8 @@ class Player {
     getCurrentMoveSpeed() {
         const gameConfig = GameConfig.getInstance();
         const realmConfig = gameConfig.getRealm(this.playerData.realm);
-        const baseSpeed = realmConfig ? realmConfig.moveSpeed : 200;
+        // 兜底速度同样取自唯一常量源，不再写死 200
+        const baseSpeed = realmConfig ? realmConfig.moveSpeed : gameConfig.getPlayerCombatBase().moveSpeed;
         
         const speedBonus = this.professionSystem.professionConfig.moveSpeedBonus || 0;
         
@@ -1097,6 +1041,8 @@ class Player {
         
         this.position = data.position || this.position;
         this.facing = data.facing || this.facing;
+        // 存亡：此处写入经 setter 转发到玩家状态机；但最终以 playerData.deserialize 为准
+        //（其内部 _syncAlive 会按读档后的气血重新同步 alive，状态机仍是唯一权威载体）。
         this.isAlive = data.isAlive !== undefined ? data.isAlive : this.isAlive;
         this.isInteracting = data.isInteracting || false;
         this.isInBattle = data.isInBattle || false;

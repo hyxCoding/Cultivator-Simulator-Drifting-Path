@@ -25,9 +25,13 @@ class BattleSystem {
         this.allies = [];          // 友方列表
         
         // ========== 战斗计时 ==========
+        // 数值唯一来源：GameConfig.combat.turnBased（改一处即全局生效）
+        const timing = GameConfig.getInstance().getBattleTiming();
         this.battleTimer = 0;
         this.turnTimer = 0;
-        this.turnDuration = 30;    // 回合时间限制（秒）
+        this.turnAdvanceTimer = 0;   // 敌人行动后延迟推进的倒计时（秒，由主循环 update 按 deltaTime 驱动）
+        this.turnDuration = config.turnDuration || timing.turnDuration;      // 回合时间限制（秒）
+        this.enemyTurnDelay = config.enemyTurnDelay || timing.enemyTurnDelay; // 敌人行动后停顿（秒）
         
         // ========== 回合制相关 ==========
         this.currentTurn = 'player'; // 'player' 或 'enemy'
@@ -130,6 +134,7 @@ class BattleSystem {
         this.isInBattle = true;
         this.battleState = 'start';
         this.battleTimer = 0;
+        this.turnAdvanceTimer = 0;
         this.battleLog = [];
         
         // 设置玩家战斗状态
@@ -209,6 +214,7 @@ class BattleSystem {
         // 清空战斗状态
         this.isInBattle = false;
         this.battleState = 'idle';
+        this.turnAdvanceTimer = 0;
         this.enemies = [];
         this.allies = [];
     }
@@ -341,6 +347,7 @@ class BattleSystem {
         this.battleState = 'running';
         this.currentTurn = 'player';
         this.turnTimer = this.turnDuration;
+        this.turnAdvanceTimer = 0;
         
         // 初始化行动顺序
         this.initTurnOrder();
@@ -392,7 +399,18 @@ class BattleSystem {
      */
     updateTurnBasedBattle(deltaTime) {
         if (this.battleState !== 'running') return;
-        
+
+        // 敌人行动后的延迟推进（替代原 setTimeout）：倒计时随主循环 deltaTime 走，
+        // 游戏暂停 / 低帧时节奏都不会漂移。待推进期间不计入回合计时。
+        if (this.turnAdvanceTimer > 0) {
+            this.turnAdvanceTimer -= deltaTime;
+            if (this.turnAdvanceTimer <= 0) {
+                this.turnAdvanceTimer = 0;
+                this.advanceTurn();
+            }
+            return;
+        }
+
         // 更新回合计时
         this.turnTimer -= deltaTime;
         
@@ -507,6 +525,8 @@ class BattleSystem {
     advanceTurn() {
         // 重置回合计时
         this.turnTimer = this.turnDuration;
+        // 清掉可能残留的待推进倒计时（玩家行动 / 超时推进时都要清）
+        this.turnAdvanceTimer = 0;
         
         // 切换到下一个行动者
         this.currentActionIndex++;
@@ -535,10 +555,9 @@ class BattleSystem {
             // 自动执行敌人行动
             this.executeEnemyTurn(currentAction);
             
-            // 敌人行动后立即推进到下一个回合
-            setTimeout(() => {
-                this.advanceTurn();
-            }, 500);
+            // 敌人行动后延迟推进到下一回合：交给主循环 update(deltaTime) 计时，
+            // 不再用 setTimeout —— 定时器与游戏暂停 / 帧率脱钩的问题已修复。
+            this.turnAdvanceTimer = this.enemyTurnDelay;
         }
     }
 
@@ -929,6 +948,7 @@ class BattleSystem {
         this.battleState = data.battleState || 'idle';
         this.battleTimer = data.battleTimer || 0;
         this.turnTimer = data.turnTimer || 0;
+        this.turnAdvanceTimer = 0;   // 瞬时计时器不存档，读档后从零开始
         this.currentTurn = data.currentTurn || 'player';
         this.battleLog = data.battleLog || [];
     }

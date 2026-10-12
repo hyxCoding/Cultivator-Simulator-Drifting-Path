@@ -83,8 +83,8 @@ class MemorySortMiniGame extends MiniGame {
     /**
      * 开始游戏
      */
-    start() {
-        super.start();
+    start(params, services) {
+        super.start(params, services);
         this.initCards();
         this.selectedCard = null;
         this.correctCount = 0;

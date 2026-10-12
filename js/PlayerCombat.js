@@ -269,7 +269,11 @@ class PlayerCombatSystem {
         this._applyGameConfigValues();
 
         // ========== 运行状态 ==========
-        this.cooldowns = { attack: 0, lingxidan: 0, hutishu: 0, dodge: 0, jianying: 0 };
+        // 冷却表已收敛到「玩家状态机」（PlayerData.stateMachine.skillCooldowns），
+        // 通过下方 cooldowns getter 统一访问；玩家尚未创建时退回本地兜底表。
+        this._fallbackCooldowns = { attack: 0, lingxidan: 0, hutishu: 0, dodge: 0, jianying: 0 };
+        // 无玩家状态机时（极早期 / 桩测试）战斗解锁的本地兜底；有状态机时以状态机为准
+        this._fallbackCombatUnlocked = false;
         this.buffs = { hutishu: 0, dodge: 0 };     // 剩余秒数
         this.hurtLock = 0;                          // 受伤僵直剩余秒数（>0 时禁止一切输入）
         this.casting = null;                        // { timer } 施法中的灵息弹
@@ -283,7 +287,8 @@ class PlayerCombatSystem {
         this.controlChainTimer = 0;                 // 锁链剩余秒数
         this.controlChainSpriteRequested = false;   // 锁链图是否已发起加载
         this.toast = { text: '', timer: 0 };        // 屏幕提示（灵息不足 / 冷却中等）
-        this.unlockedOnce = false;                  // 教学开始后永久锁定为解锁
+        // 战斗按键解锁状态已收敛到玩家状态机（PlayerData.stateMachine.combatUnlocked），
+        // 通过 isUnlocked() / setUnlocked() 读写；forceUnlocked 是调试开关，仍留在本地。
         this.forceUnlocked = config.forceUnlocked === true;
 
         // 速度增益恢复用
@@ -308,42 +313,71 @@ class PlayerCombatSystem {
         return this.main ? this.main.currentMap : null;
     }
 
+    /**
+     * 玩家状态机（存亡 / 战斗解锁 / 技能解锁·习得·冷却·互斥 的唯一权威）。
+     * 玩家尚未创建时返回 null（此时各方法走本地兜底逻辑）。
+     * @returns {PlayerStateMachine|null}
+     */
+    _stateMachine() {
+        const player = this.player;
+        return (player && player.playerData) ? player.playerData.stateMachine : null;
+    }
+
+    /**
+     * 冷却表（唯一权威 = 玩家状态机；玩家未创建时退回本地兜底表）。
+     * 直接读写该对象即等价于读写状态机 —— 全项目只有这一份冷却数据。
+     * @returns {Object<string, number>}
+     */
+    get cooldowns() {
+        const sm = this._stateMachine();
+        return sm ? sm.skillCooldowns : this._fallbackCooldowns;
+    }
+
     // ==================== 初始化 ====================
 
     /**
-     * 用 GameConfig 中的技能配置校准数值（伤害 / 减伤比例）
-     * 说明：冷却与消耗按需求书为准，故不从 GameConfig 覆盖。
+     * 用 GameConfig.skills 校准战斗数值（唯一数据源）
+     * 说明：GameConfig.skills 是技能数值的唯一来源，这里把 冷却 / 消耗 / 伤害 / 范围 /
+     * 飞行速度 / 减伤 全部同步过来。改 GameConfig 里的技能数字即全局生效，
+     * 不必再回到 PlayerCombat.CONFIG 改第二遍（旧实现只同步了伤害与射程，
+     * 导致 lingxidan 的消耗/冷却两处长期不一致 —— 「改一处不生效」的典型）。
+     * 取不到配置时保留 CONFIG 内的兜底值。
      */
     _applyGameConfigValues() {
         try {
             const gameConfig = GameConfig.getInstance();
+            const applyNumber = (target, key, value, min) => {
+                if (typeof value !== 'number') return;
+                if (typeof min === 'number' && value < min) return;
+                target[key] = value;
+            };
 
             const lingxidan = gameConfig.getSkill && gameConfig.getSkill('lingxidan');
             if (lingxidan) {
-                if (typeof lingxidan.damage === 'number') this.config.lingxidan.damage = lingxidan.damage;
-                if (typeof lingxidan.range === 'number' && lingxidan.range > 0) {
-                    this.config.lingxidan.maxDistance = lingxidan.range;
-                }
-                if (typeof lingxidan.projectileSpeed === 'number' && lingxidan.projectileSpeed > 0) {
-                    this.config.lingxidan.projectileSpeed = lingxidan.projectileSpeed;
-                }
+                applyNumber(this.config.lingxidan, 'manaCost', lingxidan.manaCost, 0);
+                applyNumber(this.config.lingxidan, 'cooldown', lingxidan.cooldown, 0);
+                applyNumber(this.config.lingxidan, 'damage', lingxidan.damage);
+                applyNumber(this.config.lingxidan, 'maxDistance', lingxidan.range, 1);
+                applyNumber(this.config.lingxidan, 'projectileSpeed', lingxidan.projectileSpeed, 1);
             }
 
             const hutishu = gameConfig.getSkill && gameConfig.getSkill('hutishu');
-            if (hutishu && typeof hutishu.shieldPercent === 'number') {
-                this.config.hutishu.damageReduction = hutishu.shieldPercent / 100;
+            if (hutishu) {
+                applyNumber(this.config.hutishu, 'manaCost', hutishu.manaCost, 0);
+                applyNumber(this.config.hutishu, 'cooldown', hutishu.cooldown, 0);
+                applyNumber(this.config.hutishu, 'duration', hutishu.duration, 0);
+                if (typeof hutishu.shieldPercent === 'number') {
+                    this.config.hutishu.damageReduction = hutishu.shieldPercent / 100;
+                }
             }
 
-            // 剑影连斩：伤害 / 最大飞行距离（range）/ 飞行速度取 GameConfig（冷却与消耗仍按需求书）
             const jianying = gameConfig.getSkill && gameConfig.getSkill('jianying');
             if (jianying) {
-                if (typeof jianying.damage === 'number') this.config.jianying.damage = jianying.damage;
-                if (typeof jianying.range === 'number' && jianying.range > 0) {
-                    this.config.jianying.maxDistance = jianying.range;
-                }
-                if (typeof jianying.projectileSpeed === 'number' && jianying.projectileSpeed > 0) {
-                    this.config.jianying.projectileSpeed = jianying.projectileSpeed;
-                }
+                applyNumber(this.config.jianying, 'manaCost', jianying.manaCost, 0);
+                applyNumber(this.config.jianying, 'cooldown', jianying.cooldown, 0);
+                applyNumber(this.config.jianying, 'damage', jianying.damage);
+                applyNumber(this.config.jianying, 'maxDistance', jianying.range, 1);
+                applyNumber(this.config.jianying, 'projectileSpeed', jianying.projectileSpeed, 1);
             }
         } catch (error) {
             console.warn('[PlayerCombat] 读取 GameConfig 技能数值失败，使用默认配置', error);
@@ -395,20 +429,33 @@ class PlayerCombatSystem {
 
     /**
      * 战斗按键是否已解锁
-     * 规则：基础操作教学开始（或已完成）后才会捕获战斗按键输入
+     * 规则：基础操作教学开始（或已完成）后才会捕获战斗按键输入。
+     * ★ 状态唯一权威 = 玩家状态机 `combatUnlocked`（单调）；本方法只做「按上下文推导 → 写入状态机 → 读回」。
      * @returns {boolean}
      */
     isUnlocked() {
-        if (this.forceUnlocked || this.unlockedOnce) return true;
+        const sm = this._stateMachine();
+        if (this.forceUnlocked) { if (sm) sm.setCombatUnlocked(true); return true; }
+        // 有状态机：以状态机为唯一权威
+        if (sm) {
+            if (sm.isCombatUnlocked()) return true;
+        } else if (this._fallbackCombatUnlocked) {
+            // 无状态机（极早期 / 桩测试）→ 读本地兜底表，保证 setUnlocked(true) 依然生效
+            return true;
+        }
 
         const main = this.main;
         const trainingManager = main && main.trainingManager;
-        if (trainingManager && trainingManager.isActive) return true;
+        if (trainingManager && trainingManager.isActive) {
+            if (sm) sm.setCombatUnlocked(true);
+            return true;
+        }
 
         // 任务层兜底（读档后依旧解锁）：chapter1_main_1 的 complete_training/basic 已完成
         const questSystem = main && main.player ? main.player.questSystem : null;
         if (questSystem && typeof questSystem.isObjectiveCompleted === 'function'
             && questSystem.isObjectiveCompleted('chapter1_main_1', 'complete_training', 'basic')) {
+            if (sm) sm.setCombatUnlocked(true);
             return true;
         }
 
@@ -421,11 +468,19 @@ class PlayerCombatSystem {
      * @returns {boolean} 是否发生了变化
      */
     setUnlocked(value = true) {
-        const changed = this.unlockedOnce !== !!value;
-        this.unlockedOnce = !!value;
-        if (changed && value) {
-            console.log('[PlayerCombat] 战斗系统已解锁（可捕获 J/U/I/L 按键）');
+        const sm = this._stateMachine();
+        if (sm) {
+            const before = sm.isCombatUnlocked();
+            sm.setCombatUnlocked(value === true);
+            const after = sm.isCombatUnlocked();
+            if (before !== after && after) {
+                Logger.log('[PlayerCombat] 战斗系统已解锁（可捕获 J/U/I/L 按键）');
+            }
+            return before !== after;
         }
+        // 无状态机（极早期）兜底
+        const changed = this._fallbackCombatUnlocked !== !!value;
+        this._fallbackCombatUnlocked = !!value;
         return changed;
     }
 
@@ -447,14 +502,34 @@ class PlayerCombatSystem {
      * - 教学进行中：只有已完成的教学步骤对应的技能解锁（逐格解锁 + 冷却提示）
      * - 教学已完成 / 读档后任务目标已完成：全部解锁
      * - 教学尚未开始：全部未解锁（技能栏整条隐藏，按键无响应）
+     *
+     * ★ 状态唯一权威 = 玩家状态机 `skillUnlocked:<id>`（单调）。
+     *   本方法把「按上下文推导」的结果写进状态机（`unlockSkill`），再以状态机为准读出。
      * @param {string} id - 'attack' | 'lingxidan' | 'hutishu' | 'dodge' | 'jianying'
      * @returns {boolean}
      */
     isSkillUnlocked(id) {
-        if (this.forceUnlocked) return true;
-
         const cfg = this.config[id];
         if (!cfg) return false;
+
+        const sm = this._stateMachine();
+        if (!sm) return this._deriveSkillUnlocked(id, cfg);   // 极早期无状态机 → 纯推导兜底
+
+        if (this._deriveSkillUnlocked(id, cfg)) sm.unlockSkill(id);
+        return sm.isSkillUnlocked(id);
+    }
+
+    /**
+     * 按上下文推导某技能「应不应该解锁」（纯计算，不写任何状态）
+     * @param {string} id
+     * @param {Object} [cfg]
+     * @returns {boolean}
+     * @private
+     */
+    _deriveSkillUnlocked(id, cfg) {
+        cfg = cfg || this.config[id];
+        if (!cfg) return false;
+        if (this.forceUnlocked) return true;
 
         // 由剧情 / 任务传授的技能（如第二章试炼的剑影连斩）：学会才可用，不参与基础操作教学
         if (cfg.learnedGate === true) return this.isSkillLearned(id);
@@ -466,7 +541,7 @@ class PlayerCombatSystem {
                 && trainingManager.isTrainingActionCompleted(cfg.trainingAction);
         }
 
-        // 教学未进行：完全解锁（教学完成后 unlockedOnce / 任务目标兜底）才全部可用
+        // 教学未进行：完全解锁（教学完成后 / 任务目标兜底）才全部可用
         return this.isUnlocked();
     }
 
@@ -476,6 +551,8 @@ class PlayerCombatSystem {
      *   1) 职业系统里的技能等级 > 0（Main.learnProfessionSkill 写入，随存档保存）；
      *   2) 任务目标兜底（例如剑影连斩 = 第二章主线一《渡口无归客》的 complete_training/sword 已完成），
      *      避免旧存档里"任务已完成但技能未写入"时技能栏空一格。
+     *
+     * ★ 状态唯一权威 = 玩家状态机 `skillLearned:<id>`（单调）；命中推导即写入状态机。
      * @param {string} id - 技能 id（需在 CONFIG 中配置 learnedFrom）
      * @returns {boolean}
      */
@@ -483,16 +560,22 @@ class PlayerCombatSystem {
         const cfg = this.config[id];
         if (!cfg) return false;
 
+        const sm = this._stateMachine();
+        if (sm && sm.isSkillLearned(id)) return true;
+
         const player = this.player;
         const system = player ? player.professionSystem : null;
         if (system && typeof system.getSkillLevel === 'function' && system.getSkillLevel(id) > 0) {
+            if (sm) sm.learnSkill(id);
             return true;
         }
 
         const gate = cfg.learnedFrom;
         const questSystem = player ? player.questSystem : null;
-        if (gate && questSystem && typeof questSystem.isObjectiveCompleted === 'function') {
-            return !!questSystem.isObjectiveCompleted(gate.questId, gate.type, gate.target);
+        if (gate && questSystem && typeof questSystem.isObjectiveCompleted === 'function'
+            && questSystem.isObjectiveCompleted(gate.questId, gate.type, gate.target)) {
+            if (sm) sm.learnSkill(id);
+            return true;
         }
 
         return false;
@@ -625,9 +708,15 @@ class PlayerCombatSystem {
      * @param {number} deltaTime
      */
     _tickTimers(deltaTime) {
-        for (const key in this.cooldowns) {
-            if (this.cooldowns[key] > 0) {
-                this.cooldowns[key] = Math.max(0, this.cooldowns[key] - deltaTime);
+        // 冷却 / 技能互斥禁用：统一由玩家状态机推进（唯一权威；无状态机时退回本地兜底表）
+        const sm = this._stateMachine();
+        if (sm) {
+            sm.tick(deltaTime);
+        } else {
+            for (const key in this._fallbackCooldowns) {
+                if (this._fallbackCooldowns[key] > 0) {
+                    this._fallbackCooldowns[key] = Math.max(0, this._fallbackCooldowns[key] - deltaTime);
+                }
             }
         }
 
@@ -1018,14 +1107,24 @@ class PlayerCombatSystem {
         const player = this.player;
         if (!player || !player.isAlive) return false;
 
-        // 1) 灵息是否足够
-        if (player.playerData.mana < cfg.manaCost) {
+        // 1) 灵息是否足够（统一走 PlayerData 方法，禁止外部直接读字段）
+        const mana = player.playerData.getMana();
+        if (mana < cfg.manaCost) {
             this._toast(cfg.name + '：灵息不足（需要 ' + cfg.manaCost + '，当前 '
-                + Math.floor(player.playerData.mana) + '）');
+                + Math.floor(mana) + '）');
             return false;
         }
 
-        // 2) 冷却是否结束
+        // 2) 技能互斥禁用（新增能力：技能 A 施展后，B 在一段时间内不可用）
+        const sm = this._stateMachine();
+        if (sm && sm.isSkillLocked(cfg.id)) {
+            if (!cfg.silentCooldown) {
+                this._toast(cfg.name + '：暂不可用（还需 ' + sm.getSkillLock(cfg.id).toFixed(1) + ' 秒）');
+            }
+            return false;
+        }
+
+        // 3) 冷却是否结束
         if (this.cooldowns[cfg.id] > 0) {
             // 普通攻击不进左下角技能栏，也不再弹屏幕中下方的冷却提示（CONFIG.attack.silentCooldown）：
             // 按快了就静默失败，冷却时长与伤害结算完全不变
@@ -1040,12 +1139,13 @@ class PlayerCombatSystem {
 
     /**
      * 扣除灵息
+     * 统一走 PlayerData.changeMana（自动裁剪到 [0, maxMana]），禁止外部直接改字段。
      * @param {number} amount
      */
     _pay(amount) {
         const player = this.player;
         if (!player) return;
-        player.playerData.mana = Math.max(0, player.playerData.mana - amount);
+        player.playerData.changeMana(-amount);
     }
 
     /**
@@ -1158,7 +1258,7 @@ class PlayerCombatSystem {
     _toast(text) {
         this.toast.text = text;
         this.toast.timer = 1.8;
-        console.log('[PlayerCombat] ' + text);
+        Logger.log('[PlayerCombat] ' + text);
     }
 
     /**
@@ -1240,7 +1340,7 @@ class PlayerCombatSystem {
         // 重置冷却（立刻可以再次施法）
         this.cooldowns.lingxidan = 0;
 
-        console.log('[PlayerCombat] 施法被打断：终止灵息弹动画，冷却重置，灵息已返还');
+        Logger.log('[PlayerCombat] 施法被打断：终止灵息弹动画，冷却重置，灵息已返还');
     }
 
     // ==================== 受伤联动（由 Player.takeDamage 调用） ====================
@@ -1357,7 +1457,7 @@ class PlayerCombatSystem {
         });
 
         this.foundationAuraTimer = typeof durationSeconds === 'number' ? durationSeconds : cfg.duration;
-        console.log(`[PlayerCombat] 筑基调息气场开始播放（${this.foundationAuraTimer} 秒）`);
+        Logger.log(`[PlayerCombat] 筑基调息气场开始播放（${this.foundationAuraTimer} 秒）`);
         return this.foundationAura;
     }
 
@@ -1388,7 +1488,7 @@ class PlayerCombatSystem {
         if (!this.foundationAura) return;
         this.foundationAuraTimer -= deltaTime;
         if (this.foundationAuraTimer <= 0) {
-            console.log('[PlayerCombat] 筑基调息气场播放结束');
+            Logger.log('[PlayerCombat] 筑基调息气场播放结束');
             this.stopFoundationAura();
         }
     }
@@ -1423,7 +1523,7 @@ class PlayerCombatSystem {
             color: '#f2d9a0',
         });
 
-        console.log(`[PlayerCombat] 控制锁链出现（${this.controlChainTimer} 秒）`);
+        Logger.log(`[PlayerCombat] 控制锁链出现（${this.controlChainTimer} 秒）`);
         return this.controlChain;
     }
 
@@ -1455,7 +1555,7 @@ class PlayerCombatSystem {
 
         this.controlChainTimer -= deltaTime;
         if (this.controlChainTimer <= 0) {
-            console.log('[PlayerCombat] 控制锁链结束');
+            Logger.log('[PlayerCombat] 控制锁链结束');
             this.stopControlChain();
         }
     }
@@ -1633,29 +1733,24 @@ class PlayerCombatSystem {
     }
 
     /**
-     * 圆与矩形相交判定（与 ShanxiaoBoss.circleIntersectsRect 相同的算法）
+     * 圆与矩形相交判定（统一走 CollisionDetector，不再自写一份算法）
      * @param {Object} center - 圆心 {x, y}
      * @param {number} radius
      * @param {Object} rect - {x, y, width, height}
      * @returns {boolean}
      */
     _circleIntersectsRect(center, radius, rect) {
-        const closestX = Math.max(rect.x, Math.min(center.x, rect.x + rect.width));
-        const closestY = Math.max(rect.y, Math.min(center.y, rect.y + rect.height));
-        const dx = closestX - center.x;
-        const dy = closestY - center.y;
-        return dx * dx + dy * dy <= radius * radius;
+        return CollisionDetector.circleIntersectsRect(center, radius, rect);
     }
 
     /**
-     * 矩形相交判定
+     * 矩形相交判定（统一走 CollisionDetector）
      * @param {Object} a
      * @param {Object} b
      * @returns {boolean}
      */
     _rectsIntersect(a, b) {
-        return a.x < b.x + b.width && a.x + a.width > b.x
-            && a.y < b.y + b.height && a.y + a.height > b.y;
+        return CollisionDetector.rectsIntersect(a, b);
     }
 
     // ==================== 渲染 ====================
@@ -1699,13 +1794,12 @@ class PlayerCombatSystem {
     // ==================== 序列化 ====================
 
     /**
-     * 序列化（存档）：只记录解锁状态，冷却 / 增益读档后重置
+     * 序列化（存档）：战斗解锁状态已收敛到玩家状态机（随 PlayerData 存档），
+     * 冷却 / 增益为瞬时状态，读档后重置 —— 故此处无自有字段。
      * @returns {Object}
      */
     serialize() {
-        return {
-            unlockedOnce: this.unlockedOnce,
-        };
+        return {};
     }
 
     /**
@@ -1714,7 +1808,12 @@ class PlayerCombatSystem {
      */
     deserialize(data) {
         if (!data) return;
-        this.unlockedOnce = !!data.unlockedOnce || this.unlockedOnce;
+        // 兼容旧存档：旧的 unlockedOnce 字段 → 写入玩家状态机（单调，只置真）
+        if (data.unlockedOnce) {
+            const sm = this._stateMachine();
+            if (sm) sm.setCombatUnlocked(true);
+            else this._fallbackCombatUnlocked = true;
+        }
     }
 
     // ==================== HUD（气血 / 灵息 / 技能冷却 / 提示） ====================

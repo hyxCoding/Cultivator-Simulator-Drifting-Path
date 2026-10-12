@@ -220,12 +220,21 @@
     <!-- ========== 按依赖顺序引入所有JavaScript文件 ========== -->
     
     <!-- 第1层：基础类 -->
+    <!-- 统一日志开关（必须最先引入）：Logger.log 默认静默，?debug=1 或 Logger.enable() 打开 -->
+    <script src="js/Logger.js"></script>
     <script src="js/ResourceManager.js"></script>
     <!-- 音频管理器（背景音乐循环 / 音效单次；音频键与文件路径登记在 ResourceManager，
          触发点见 tools/音频资源清单.txt；缺失音频文件时静默跳过，不会报错） -->
     <script src="js/AudioManager.js"></script>
     <script src="js/GameConfig.js"></script>
     <script src="js/CollisionDetector.js"></script>
+    <!-- 状态机（第1层）：状态收敛底座 + 三个业务状态机。
+         StateMachine 通用基类 → ProgressStateMachine（剧情进度）/ QuestStateMachine（任务树）/ PlayerStateMachine（玩家）。
+         全项目进度型布尔状态统一登记于此，上层只通过方法读写（见 docs/StateMachine.md）。 -->
+    <script src="js/StateMachine.js"></script>
+    <script src="js/ProgressStateMachine.js"></script>
+    <script src="js/QuestStateMachine.js"></script>
+    <script src="js/PlayerStateMachine.js"></script>
     
     <!-- 第2层：地图相关 -->
     <script src="js/TileSystem.js"></script>
@@ -313,7 +322,6 @@
     
     <!-- 第15层：存档 -->
     <script src="js/SaveManager.js"></script>
-    <script src="js/GameDataManager.js"></script>
     
     <!-- 第16层：场景类 -->
     <script src="js/MainMenuScene.js"></script>
@@ -323,8 +331,16 @@
     <!-- 游戏完结界面（章末二登船后的滚动字幕：背景 + 逐行居中上滚 + 任意键返回） -->
     <script src="js/EndingScene.js"></script>
     
-    <!-- 第17层：主程序 -->
+    <!-- 第17层：主程序（Main 为编排层；内聚职责按原型混入拆到 js/main/ 下，必须排在 Main.js 之后） -->
     <script src="js/Main.js"></script>
+    <!-- 第17层附属：Main 的职责拆分（Object.assign(Main.prototype, {...})，调用点仍为 this.xxx()） -->
+    <script src="js/main/MainAudio.js"></script>
+    <script src="js/main/MainRender.js"></script>
+    <script src="js/main/MainMiniGame.js"></script>
+    <script src="js/main/MainStory.js"></script>
+    <script src="js/main/MainBossArena.js"></script>
+    <script src="js/main/MainProgression.js"></script>
+    <script src="js/main/MainChapter2.js"></script>
     
     <!-- ========== 游戏启动 ========== -->
     <script>

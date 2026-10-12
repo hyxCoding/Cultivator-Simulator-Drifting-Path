@@ -67,7 +67,7 @@ class AStar {
             
             // 到达终点
             if (currentKey === endKey) {
-                return this.reconstructPath(cameFrom, current, tileSize);
+                return this.reconstructPath(cameFrom, current, tileSize, grid);
             }
             
             // 从开放列表移除当前节点
@@ -160,8 +160,12 @@ class AStar {
     /**
      * 重建路径
      * 将瓦片路径转换为世界坐标，并优化减少拐点
+     * @param {Map} cameFrom - 路径来源
+     * @param {Object} current - 终点瓦片
+     * @param {number} tileSize - 瓦片大小（像素）
+     * @param {Array} [grid] - 可行走网格（供视线检测使用，避免拉直时穿墙）
      */
-    static reconstructPath(cameFrom, current, tileSize) {
+    static reconstructPath(cameFrom, current, tileSize, grid) {
         const tilePath = [current];
         let currentKey = this.getNodeKey(current);
         
@@ -172,7 +176,7 @@ class AStar {
         }
         
         // 优化路径：移除不必要的中间点（减少拐点）
-        const optimizedPath = this.optimizePath(tilePath);
+        const optimizedPath = this.optimizePath(tilePath, grid);
         
         // 转换为世界坐标（瓦片中心点）
         return optimizedPath.map(tile => ({
@@ -184,8 +188,10 @@ class AStar {
     /**
      * 优化路径，减少拐点
      * 使用视线检测移除不需要的中间节点
+     * @param {Array} tilePath - 瓦片路径
+     * @param {Array} [grid] - 可行走网格（传给 hasLineOfSight，避免拉直时穿墙）
      */
-    static optimizePath(tilePath) {
+    static optimizePath(tilePath, grid) {
         if (tilePath.length <= 2) {
             return tilePath;
         }
@@ -198,7 +204,7 @@ class AStar {
             let farthestVisible = currentIndex + 1;
             
             for (let i = tilePath.length - 1; i > currentIndex + 1; i--) {
-                if (this.hasLineOfSight(tilePath[currentIndex], tilePath[i])) {
+                if (this.hasLineOfSight(tilePath[currentIndex], tilePath[i], grid)) {
                     farthestVisible = i;
                     break;
                 }
@@ -213,25 +219,50 @@ class AStar {
 
     /**
      * 检查两个瓦片之间是否有视线（直线无障碍）
-     * 使用Bresenham直线算法
+     * 使用 Bresenham 直线栅格化：枚举直线穿过的每个瓦片，任一不可走即判定被遮挡。
+     * 对角步进时额外要求两侧正交格至少一个可走，避免「贴角穿墙」。
+     *
+     * ⚠ 历史问题：旧实现无条件 `return true`（注释「简化处理」），
+     *   使 optimizePath 把折线路径拉直成穿墙直线 → NPC 贴墙穿模 / 卡住。
+     *
+     * @param {{x:number,y:number}} tileA - 起点瓦片
+     * @param {{x:number,y:number}} tileB - 终点瓦片
+     * @param {Array} [grid] - 可行走网格 [y][x]；缺省时退回宽松判定（返回 true）
+     * @returns {boolean} 两点之间是否无遮挡
      */
-    static hasLineOfSight(tileA, tileB) {
-        // 如果两点相同
-        if (tileA.x === tileB.x && tileA.y === tileB.y) {
-            return true;
+    static hasLineOfSight(tileA, tileB, grid) {
+        if (!grid) return true;   // 无网格信息 → 保持旧的宽松行为（不影响不传 grid 的调用方）
+        if (tileA.x === tileB.x && tileA.y === tileB.y) return true;
+
+        let x0 = tileA.x;
+        let y0 = tileA.y;
+        const x1 = tileB.x;
+        const y1 = tileB.y;
+
+        const dx = Math.abs(x1 - x0);
+        const dy = Math.abs(y1 - y0);
+        const sx = x0 < x1 ? 1 : -1;
+        const sy = y0 < y1 ? 1 : -1;
+        let err = dx - dy;
+
+        while (true) {
+            if (!this.isWalkable(x0, y0, grid)) return false;
+            if (x0 === x1 && y0 === y1) return true;
+
+            const e2 = 2 * err;
+            let steppedX = false;
+            let steppedY = false;
+
+            if (e2 > -dy) { err -= dy; x0 += sx; steppedX = true; }
+            if (e2 < dx) { err += dx; y0 += sy; steppedY = true; }
+
+            // 对角步进：两侧正交格至少一个可走，否则视为被墙角遮挡
+            if (steppedX && steppedY) {
+                if (!this.isWalkable(x0 - sx, y0, grid) && !this.isWalkable(x0, y0 - sy, grid)) {
+                    return false;
+                }
+            }
         }
-        
-        // 如果是水平或垂直线
-        if (tileA.x === tileB.x || tileA.y === tileB.y) {
-            return true;
-        }
-        
-        // 对角线视线检查
-        const dx = tileB.x - tileA.x;
-        const dy = tileB.y - tileA.y;
-        
-        // 检查是否为直线（45度或其他角度）
-        return true; // 简化处理，实际使用时可加入障碍检测
     }
 
     // ==================== 轴对齐寻路（大型怪物 / Boss 专用） ====================

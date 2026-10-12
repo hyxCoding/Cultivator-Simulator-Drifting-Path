@@ -124,7 +124,7 @@ class EndingScene extends Scene {
      */
     enter(params = {}) {
         super.enter(params);
-        console.log('进入游戏完结界面（滚动字幕）');
+        Logger.log('进入游戏完结界面（滚动字幕）');
 
         this.lines = this.readLines();
         this.loadBackground();
@@ -286,7 +286,7 @@ class EndingScene extends Scene {
                 && this.getLineY(this.lines.length - 1) + this.lineHeight / 2 <= 0) {
                 this.isFinished = true;
                 this.promptTimer = 0;
-                console.log('[游戏完结] 字幕播毕，等待玩家按键返回');
+                Logger.log('[游戏完结] 字幕播毕，等待玩家按键返回');
             }
             return;
         }

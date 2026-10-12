@@ -840,7 +840,12 @@ async function main() {
         sizeEq(pngSize('assets', 'images', 'effects', 'boss_due_chain.png'), 32, 32));
 
     section('12. 主程序接线（静态检查）');
-    const mainJs = fs.readFileSync(path.join(ROOT, 'js', 'Main.js'), 'utf8');
+    // Main 已按职责拆分：内聚方法移到 js/main/*.js（原型混入，调用点仍是 this.xxx()）。
+    // 静态守卫面向「整个 Main 层」，故把 Main.js 与全部 js/main/*.js 拼起来一起扫。
+    const mainLayerFiles = ['js/Main.js'].concat(
+        fs.readdirSync(path.join(ROOT, 'js', 'main')).filter(f => f.endsWith('.js')).sort()
+            .map(f => 'js/main/' + f));
+    const mainJs = mainLayerFiles.map(f => fs.readFileSync(path.join(ROOT, f.replace(/\//g, path.sep)), 'utf8')).join('\n');
     const npcJs = fs.readFileSync(path.join(ROOT, 'js', 'NPC.js'), 'utf8');
     const gameMapJs = fs.readFileSync(path.join(ROOT, 'js', 'GameMap.js'), 'utf8');
     const teleportJs = fs.readFileSync(path.join(ROOT, 'js', 'TeleportArray.js'), 'utf8');
@@ -851,8 +856,9 @@ async function main() {
     check('Main 有第二章章末流程（登船路标 / 结丹调息）',
         mainJs.indexOf('ensureChapter2BoatSignpost') !== -1 && mainJs.indexOf('startCoreFormationTrial') !== -1);
     // 静态兜底：两个方法都必须带章节判断（运行时回归见第 7 节的 chapterEndStageGuard）
-    const restageSource = mainJs.slice(mainJs.indexOf('applyChapterEndStage(gameMap)'));
-    const departSignSource = mainJs.slice(mainJs.indexOf('createDepartSignpost(gameMap)'));
+    // 用「定义锚点」（结尾带 ` {`）定位，避免命中同名的调用点 this.applyChapterEndStage(...)
+    const restageSource = mainJs.slice(mainJs.indexOf('applyChapterEndStage(gameMap) {'));
+    const departSignSource = mainJs.slice(mainJs.indexOf('createDepartSignpost(gameMap) {'));
     check('Main 的第一章章末舞台恢复 / 登船路标生成都带「仅第一章地图」判断（回归：进云渡泽时阿禾站位错 / 冒出登船路标）',
         restageSource.length > 0 && restageSource.slice(0, 400).indexOf('this.isChapter1Map(map)') !== -1
         && departSignSource.length > 0 && departSignSource.slice(0, 400).indexOf('this.isChapter1Map(map)') !== -1);
@@ -1197,19 +1203,21 @@ const miniGameSceneJs = fs.readFileSync(path.join(ROOT, 'js', 'MiniGameScene.js'
         && boatJs.indexOf('gameAudio') === -1);
 
     check('乘风采药：只在起风期间循环播放 BGM；风停 / 重新开局立即停',
-        herbGameJs.indexOf("gameAudio.playBgm('bgm.minigame_herb')") !== -1
-        && herbGameJs.indexOf("gameAudio.stopBgm('bgm.minigame_herb')") !== -1
-        && herbGameJs.indexOf("gameAudio.playBgm('bgm.minigame_herb')")
+        // 重构后：小游戏不再直连 gameAudio 单例，改走基类服务适配器 this.playBgm / this.stopBgm
+        // （未注入服务时内部仍回落 gameAudio，行为不变）
+        herbGameJs.indexOf("this.playBgm('bgm.minigame_herb')") !== -1
+        && herbGameJs.indexOf("this.stopBgm('bgm.minigame_herb')") !== -1
+        && herbGameJs.indexOf("this.playBgm('bgm.minigame_herb')")
             > herbGameJs.indexOf('this.wind.active = true')
-        && herbGameJs.indexOf("gameAudio.stopBgm('bgm.minigame_herb')")
+        && herbGameJs.indexOf("this.stopBgm('bgm.minigame_herb')")
             > herbGameJs.indexOf('this.wind.active = false'));
     check('乘风采药采到草药播拾取音效；Main 拾取任务道具也播同一个音效',
-        herbGameJs.indexOf("gameAudio.playSfx('sfx.pickup')") !== -1
+        herbGameJs.indexOf("this.playSfx('sfx.pickup')") !== -1
         && mainJs.indexOf("this.playSfx('sfx.pickup')") !== -1);
     check('认灯归魂：每点亮一盏播亮灯音效；猜错且还有机会时（熄灭前）播灭灯音效',
-        lanternGameJs.indexOf("gameAudio.playSfx('sfx.minigame_lantern_light')") !== -1
-        && lanternGameJs.indexOf("gameAudio.playSfx('sfx.minigame_lantern_extinguish')") !== -1
-        && lanternGameJs.indexOf("gameAudio.playSfx('sfx.minigame_lantern_extinguish')")
+        lanternGameJs.indexOf("this.playSfx('sfx.minigame_lantern_light')") !== -1
+        && lanternGameJs.indexOf("this.playSfx('sfx.minigame_lantern_extinguish')") !== -1
+        && lanternGameJs.indexOf("this.playSfx('sfx.minigame_lantern_extinguish')")
             < lanternGameJs.indexOf('this._extinguishAll();'));
     check('小游戏成功 / 失败各播一次胜利 / 失败音效',
         miniGameManagerJs.indexOf("gameAudio.playSfx('sfx.victory')") !== -1
@@ -1233,7 +1241,7 @@ const miniGameSceneJs = fs.readFileSync(path.join(ROOT, 'js', 'MiniGameScene.js'
     check('玩家受伤：每次受伤播一次，正在播时不重播（playSfxExclusive）',
         playerJs.indexOf("gameAudio.playSfxExclusive('sfx.player_hurt')") !== -1
         && playerJs.indexOf("gameAudio.playSfxExclusive('sfx.player_hurt')")
-            > playerJs.indexOf('this.playerData.health -= actualDamage;'));
+            > playerJs.indexOf('this.playerData.changeHealth(-actualDamage);'));
     check('摄风山魈：蓄力 / 横扫 / 扑击 / 砸地 / 受伤 / 战败 六个音效全部接上',
         ['charge', 'sweep', 'pounce', 'slam', 'hurt', 'defeat'].every(name =>
             shanxiaoJs.indexOf(`'sfx.boss_shanxiao_${name}'`) !== -1));
@@ -1412,7 +1420,8 @@ const miniGameSceneJs = fs.readFileSync(path.join(ROOT, 'js', 'MiniGameScene.js'
         (() => {
             const stopAt = herbGameJs.indexOf('_stopWindBgm() {');
             if (stopAt === -1) return false;
-            if (herbGameJs.slice(stopAt).indexOf("gameAudio.stopBgm('bgm.minigame_herb');") === -1) return false;
+            // 重构后：_stopWindBgm 内部走基类服务适配器 this.stopBgm（未注入服务时回落 gameAudio）
+            if (herbGameJs.slice(stopAt).indexOf("this.stopBgm('bgm.minigame_herb');") === -1) return false;
             const calls = (herbGameJs.match(/this\._stopWindBgm\(\);/g) || []).length;
             const overrides = ['complete() {', 'fail() {', 'exit() {']
                 .every(sig => herbGameJs.indexOf(sig) !== -1);

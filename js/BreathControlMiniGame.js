@@ -44,8 +44,8 @@ class BreathControlMiniGame extends MiniGame {
     /**
      * 开始游戏
      */
-    start() {
-        super.start();
+    start(params, services) {
+        super.start(params, services);
         this.dotAngle = 0;
         this.successCount = 0;
         this.perfectCount = 0;

@@ -95,7 +95,7 @@ class TrainingManager {
             this.onAllCompleted = onComplete;
         }
 
-        console.log(`[TrainingManager] ${this.currentLabel} 开始，${this.zones.length} 个目标已放置`);
+        Logger.log(`[TrainingManager] ${this.currentLabel} 开始，${this.zones.length} 个目标已放置`);
     }
 
     /**
@@ -209,7 +209,7 @@ class TrainingManager {
         if (!zone.complete()) return false;
 
         this.completedCount++;
-        console.log(`[TrainingManager] 完成训练: ${zone.name} (${this.completedCount}/${this.zones.length})`);
+        Logger.log(`[TrainingManager] 完成训练: ${zone.name} (${this.completedCount}/${this.zones.length})`);
         return true;
     }
 
@@ -219,7 +219,7 @@ class TrainingManager {
     _allCompleted() {
         this.isActive = false;
         this.nearbyZone = null;
-        console.log('[TrainingManager] 基础训练全部完成！');
+        Logger.log('[TrainingManager] 基础训练全部完成！');
         if (this.onAllCompleted) {
             this.onAllCompleted();
         }

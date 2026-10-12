@@ -11,6 +11,10 @@ class ProfessionSystem {
         
         this.currentProfessionId = config.professionId || 'sanxiu';
         this.professionConfig = gameConfig.getProfession(this.currentProfessionId);
+
+        // 玩家数据引用（唯一境界来源）：由 Player 在构造时注入。
+        // 未注入时 getCurrentRealm 回落到默认境界，而不是旧代码写死的 'zhuji'。
+        this.playerData = config.playerData || null;
         
         // 技能配置
         this.basicSkills = new Map();      // 基础技能 {skillId: level}
@@ -20,9 +24,13 @@ class ProfessionSystem {
         // 流派选择（结丹后开放）
         this.currentSchool = config.school || null; // 当前流派
         
-        // 技能点
-        this.basicSkillPoints = config.basicSkillPoints || 0;
-        this.professionSkillPoints = config.professionSkillPoints || 0;
+        // 技能点：唯一存储位置是 PlayerData（见 js/PlayerData.js）。
+        // 下面两个字段只在「没有注入 playerData」时作为兜底；对外仍通过
+        // basicSkillPoints / professionSkillPoints 访问器读写（见下方 getter/setter），
+        // 有 playerData 时一律落到 playerData 上 —— 外部代码无需改动，
+        // 也不再有「两处各存一份、改一处不生效」的问题。
+        this._basicSkillPoints = config.basicSkillPoints || 0;
+        this._professionSkillPoints = config.professionSkillPoints || 0;
         
         // 默认配置
         this.defaultBasicSkills = ['lingxidan', 'hutishu'];
@@ -31,6 +39,28 @@ class ProfessionSystem {
         
         // 初始化默认技能
         this.initDefaultSkills();
+    }
+
+    // ==================== 技能点访问器（唯一存储 = PlayerData）====================
+    // 说明：注入 playerData 后，读写都代理到 playerData，保证「改一处即全局生效」；
+    //       未注入时退回本对象的兜底字段（兼容单独实例化的场景 / 测试）。
+
+    get basicSkillPoints() {
+        if (this.playerData) return this.playerData.basicSkillPoints || 0;
+        return this._basicSkillPoints || 0;
+    }
+    set basicSkillPoints(value) {
+        if (this.playerData) { this.playerData.basicSkillPoints = value; return; }
+        this._basicSkillPoints = value;
+    }
+
+    get professionSkillPoints() {
+        if (this.playerData) return this.playerData.professionSkillPoints || 0;
+        return this._professionSkillPoints || 0;
+    }
+    set professionSkillPoints(value) {
+        if (this.playerData) { this.playerData.professionSkillPoints = value; return; }
+        this._professionSkillPoints = value;
     }
 
     /**
@@ -80,7 +110,7 @@ class ProfessionSystem {
             // 根据当前境界解锁技能
             professionConfig.skills.forEach(skillId => {
                 const skillConfig = gameConfig.getSkill(skillId);
-                if (skillConfig && this.isSkillUnlocked(skillConfig.unlockStage)) {
+                if (skillConfig && this.isRealmReached(skillConfig.unlockStage)) {
                     this.professionSkills.set(skillId, 1);
                 }
             });
@@ -93,32 +123,60 @@ class ProfessionSystem {
     }
 
     /**
-     * 检查技能是否已解锁
+     * 判断当前境界是否已达到某个「解锁境界」门槛。
+     *
+     * 说明（命名澄清）：本方法只做**境界门槛比较**，与「某个技能是否解锁」是两回事 ——
+     * 后者（技能能否出现在技能栏）由玩家状态机 `PlayerStateMachine.isSkillUnlocked(skillId)` 统一负责。
+     * 旧名 `isSkillUnlocked(unlockStage)` 语义有歧义，已改名 `isRealmReached`。
      * @param {string} unlockStage - 解锁境界
-     * @returns {boolean} 是否解锁
+     * @returns {boolean} 是否已达到
      */
-    isSkillUnlocked(unlockStage) {
-        const realmOrder = ['lianqi', 'zhuji', 'jiedan', 'yuanying', 'huashen'];
+    isRealmReached(unlockStage) {
+        // 境界顺序取自唯一常量源（GameConfig.realmOrder）
+        const realmOrder = GameConfig.getInstance().getRealmOrder();
         const currentRealmIndex = realmOrder.indexOf(this.getCurrentRealm());
         const unlockRealmIndex = realmOrder.indexOf(unlockStage);
         
         return currentRealmIndex >= unlockRealmIndex;
     }
 
+    /** @deprecated 旧名，语义易混淆；请改用 isRealmReached(unlockStage) */
+    isSkillUnlocked(unlockStage) { return this.isRealmReached(unlockStage); }
+
     /**
      * 获取当前境界
+     * 修正（重构）：旧实现永远返回 'zhuji'（注释「暂时返回默认」），导致练气期就解锁筑基技能。
+     * 现在实时读取注入的 playerData；无引用时回落到 GameConfig 的默认境界。
      */
     getCurrentRealm() {
-        // 这里需要从玩家数据获取，暂时返回默认
-        return 'zhuji'; // 实际使用时应该从PlayerData获取
+        if (this.playerData && this.playerData.realm) return this.playerData.realm;
+        return GameConfig.getInstance().getDefaultRealmId();
     }
 
     /**
      * 获取当前境界阶段
      */
     getCurrentRealmStage() {
-        // 这里需要从玩家数据获取，暂时返回默认
+        if (this.playerData && this.playerData.stage) return this.playerData.stage;
         return '初期';
+    }
+
+    /**
+     * 绑定 / 替换玩家数据引用（读档重建角色时使用）
+     * @param {PlayerData} playerData
+     */
+    setPlayerData(playerData) {
+        // 从「无 playerData」切到「有」时，把兜底字段里可能残留的值并入唯一存储
+        // （仅当对方为空时），避免历史数据丢失。
+        if (playerData && !this.playerData) {
+            if (!playerData.basicSkillPoints && this._basicSkillPoints) {
+                playerData.basicSkillPoints = this._basicSkillPoints;
+            }
+            if (!playerData.professionSkillPoints && this._professionSkillPoints) {
+                playerData.professionSkillPoints = this._professionSkillPoints;
+            }
+        }
+        this.playerData = playerData || null;
     }
 
     /**
@@ -178,8 +236,7 @@ class ProfessionSystem {
      * 获取攻击伤害
      */
     getAttackDamage() {
-        const gameConfig = GameConfig.getInstance();
-        const baseDamage = 10; // 基础普通攻击伤害
+        const baseDamage = GameConfig.getInstance().getPlayerCombatBase().attackDamage;
         
         // 根据职业调整伤害
         const damageBonus = this.professionConfig.damageBonus || 0;
@@ -191,7 +248,7 @@ class ProfessionSystem {
      * 获取攻击范围
      */
     getAttackRange() {
-        const baseRange = 50; // 基础攻击范围
+        const baseRange = GameConfig.getInstance().getPlayerCombatBase().attackRange;
         
         // 根据职业调整范围
         const rangeBonus = this.professionConfig.rangeBonus || 0;
@@ -203,7 +260,7 @@ class ProfessionSystem {
      * 获取攻击冷却时间
      */
     getAttackCooldown() {
-        const baseCooldown = 0.5; // 基础攻击冷却
+        const baseCooldown = GameConfig.getInstance().getPlayerCombatBase().attackCooldown;
         
         // 根据职业调整冷却
         const cooldownReduction = this.professionConfig.cooldownReduction || 0;
@@ -238,6 +295,8 @@ class ProfessionSystem {
 
     /**
      * 序列化职业系统（用于存档）
+     * 注：basicSkillPoints / professionSkillPoints 是访问器，输出的是 PlayerData 里的值
+     * （保留在结构里仅为兼容旧存档格式与外部读取）。
      * @returns {Object} 序列化数据
      */
     serialize() {
@@ -253,6 +312,8 @@ class ProfessionSystem {
 
     /**
      * 反序列化职业系统（用于读档）
+     * 注：技能点的唯一存储在 PlayerData（Player.deserialize 已先还原 playerData）。
+     * 这里只在「没有 playerData」时用存档里的旧值兜底，绝不覆盖唯一数据源。
      * @param {Object} data - 序列化数据
      */
     deserialize(data) {
@@ -263,7 +324,9 @@ class ProfessionSystem {
         this.basicSkills = new Map(data.basicSkills || []);
         this.professionSkills = new Map(data.professionSkills || []);
         this.currentSchool = data.currentSchool || null;
-        this.basicSkillPoints = data.basicSkillPoints || 0;
-        this.professionSkillPoints = data.professionSkillPoints || 0;
+        if (!this.playerData) {
+            this._basicSkillPoints = data.basicSkillPoints || 0;
+            this._professionSkillPoints = data.professionSkillPoints || 0;
+        }
     }
 }

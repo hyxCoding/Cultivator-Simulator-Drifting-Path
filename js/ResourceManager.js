@@ -639,6 +639,32 @@ class ResourceManager {
         this.imageCache = new Map();
         // 音频缓存，用于存储已加载的音频对象
         this.audioCache = new Map();
+
+        // 已告警过的「缺失资源」集合（点号键）。
+        // 本作有大量美术占位（未实现章节 / 小游戏 / 职业立绘等，见
+        // docs/未实现内容与后续开发方向.md），同一路径只提示一次，避免控制台刷屏。
+        // 完整的缺失清单可用 tools/check_assets.js 生成。
+        this._warnedMissing = new Set();
+    }
+
+    /**
+     * 输出一次「资源缺失 / 路径错误」提示（同一键仅提示一次，走统一日志开关）。
+     * @param {string} message - 提示文本
+     * @param {string} dedupeKey - 去重键（通常是资源点号路径）
+     * @param {string} [level='warn'] - 'warn' | 'error'
+     */
+    _warnMissingOnce(message, dedupeKey, level = 'warn') {
+        if (this._warnedMissing.has(dedupeKey)) return;
+        this._warnedMissing.add(dedupeKey);
+        const hasLogger = (typeof Logger !== 'undefined');
+        if (level === 'error') {
+            if (hasLogger && Logger.error) Logger.error(message);
+            else console.error(message);
+        } else if (hasLogger && Logger.warn) {
+            Logger.warn(message);
+        } else {
+            console.warn(message);
+        }
     }
 
     /**
@@ -651,7 +677,7 @@ class ResourceManager {
         let current = this.resources.images;
         for (const key of keys) {
             if (current[key] === undefined) {
-                console.error(`图片资源路径不存在: ${path}`);
+                this._warnMissingOnce(`图片资源路径不存在: ${path}`, `imgpath:${path}`, 'error');
                 return null;
             }
             current = current[key];
@@ -669,7 +695,7 @@ class ResourceManager {
         let current = this.resources.audio;
         for (const key of keys) {
             if (current[key] === undefined) {
-                console.error(`音频资源路径不存在: ${path}`);
+                this._warnMissingOnce(`音频资源路径不存在: ${path}`, `audpath:${path}`, 'error');
                 return null;
             }
             current = current[key];
@@ -685,8 +711,7 @@ class ResourceManager {
     loadImage(path) {
         const imagePath = this.getImagePath(path);
         if (!imagePath) {
-            console.warn(`图片资源路径不存在: ${path}`);
-            // 返回一个空的占位图，而不是 reject
+            // getImagePath 已按去重规则提示过，这里直接返回占位图
             return Promise.resolve(this.createPlaceholderImage());
         }
         
@@ -701,7 +726,7 @@ class ResourceManager {
                 resolve(img);
             };
             img.onerror = () => {
-                console.warn(`图片加载失败: ${imagePath}，使用占位图`);
+                this._warnMissingOnce(`图片加载失败: ${imagePath}，使用占位图`, `img:${path}`);
                 // 失败时返回占位图，不 reject
                 const placeholder = this.createPlaceholderImage();
                 this.imageCache.set(imagePath, placeholder);
@@ -773,8 +798,8 @@ class ResourceManager {
     loadAudio(path) {
         const audioPath = this.getAudioPath(path);
         if (!audioPath) {
-            console.warn(`音频资源路径不存在: ${path}`);
-            return Promise.resolve(new Audio()); // 返回空音频
+            // getAudioPath 已按去重规则提示过，这里直接返回空音频
+            return Promise.resolve(new Audio());
         }
         
         if (this.audioCache.has(audioPath)) {
@@ -788,7 +813,7 @@ class ResourceManager {
                 resolve(audio);
             };
             audio.onerror = () => {
-                console.warn(`音频加载失败: ${audioPath}，使用空音频`);
+                this._warnMissingOnce(`音频加载失败: ${audioPath}，使用空音频`, `aud:${path}`);
                 this.audioCache.set(audioPath, audio);
                 resolve(audio); // 失败也返回，不 reject
             };
@@ -854,7 +879,7 @@ class ResourceManager {
     getResourceGroup(name) {
         const group = this.resourceGroups ? this.resourceGroups[name] : null;
         if (!group) {
-            console.warn(`资源分组不存在: ${name}`);
+            this._warnMissingOnce(`资源分组不存在: ${name}`, `group:${name}`);
             return { images: [], audio: [] };
         }
         return {

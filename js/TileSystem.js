@@ -246,10 +246,22 @@ class TileSystem {
 
     /**
      * 获取地图数据（用于A*寻路）
+     *
+     * 性能：结果**按 walkableTiles 的引用缓存**（寻路每个 pathUpdateInterval 调用一次，
+     * 地图加载后碰撞表不再变），避免每次深拷贝整张网格（100×100 就是 1 万个元素）。
+     * `initTilesFromCollisionImage` 每次重建都会**重新赋值** walkableTiles，
+     * 这里用引用比对自动失效缓存，无需手动清理。
+     *
+     * ⚠ 返回的是**缓存副本**，调用方只读，请勿修改（AStar 只读取）。
      * @returns {Array} 二维数组，true=可达，false=不可达
      */
     getWalkableGrid() {
-        return this.walkableTiles.map(row => [...row]);
+        if (this._walkableGridCache && this._walkableGridCacheSource === this.walkableTiles) {
+            return this._walkableGridCache;
+        }
+        this._walkableGridCache = this.walkableTiles.map(row => [...row]);
+        this._walkableGridCacheSource = this.walkableTiles;
+        return this._walkableGridCache;
     }
 
     /**

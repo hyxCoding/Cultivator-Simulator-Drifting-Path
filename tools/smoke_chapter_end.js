@@ -202,6 +202,19 @@ function loadGameScripts(context) {
     return files;
 }
 
+/**
+ * Main 层源码（Main.js + js/main/*.js 原型混入）拼接。
+ * Main 已按职责拆分，静态守卫面向「整个 Main 层」，故统一从这里取源码。
+ */
+function readMainLayerSource() {
+    const mainDir = path.join(ROOT, 'js', 'main');
+    const extra = fs.existsSync(mainDir)
+        ? fs.readdirSync(mainDir).filter(f => f.endsWith('.js')).sort().map(f => path.join(mainDir, f))
+        : [];
+    return [path.join(ROOT, 'js', 'Main.js')].concat(extra)
+        .map(f => fs.readFileSync(f, 'utf8')).join('\n');
+}
+
 /** 读取 PNG 尺寸（IHDR：宽/高各 4 字节，偏移 16/20） */
 function readPngSize(filePath) {
     const buf = fs.readFileSync(filePath);
@@ -218,8 +231,8 @@ async function main() {
     const files = loadGameScripts(context);
     check(`加载 ${files.length} 个 js 文件（语法/加载期均正常）`, files.length > 0);
 
-    // 静态源码断言（预加载列表等）用：Main.js 原文
-    const mainJsSource = fs.readFileSync(path.join(ROOT, 'js', 'Main.js'), 'utf8');
+    // 静态源码断言（预加载列表等）用：Main 层源码（Main.js + js/main/*.js）
+    const mainJsSource = readMainLayerSource();
 
     // 断言用的场景脚本（在同一个 global 词法环境中执行，可直接访问游戏类）
     const runner = fs.readFileSync(path.join(__dirname, 'smoke_chapter_end_runner.js'), 'utf8');
@@ -451,7 +464,7 @@ async function main() {
         && results.worldMapStoryEntry.visible === true, results.worldMapStoryEntry);
 
     // 静态检查：世界地图区域按钮只剩青岚浮野 / 云渡泽，且都 enabled: true、都走统一入口
-    const mainJsText = fs.readFileSync(path.join(ROOT, 'js', 'Main.js'), 'utf8');
+    const mainJsText = readMainLayerSource();
     const wmBlock = mainJsText.slice(
         mainJsText.indexOf('区域按钮：地图已删减为前两章'),
         mainJsText.indexOf('const taskPanelBg'));
@@ -1103,7 +1116,7 @@ async function main() {
         ss.noArtRender);
     check('js 代码里不再绘制开始界面文字（标题 / 「按任意键开始游戏」均已删除，改为贴图）', (() => {
         const mm = fs.readFileSync(path.join(ROOT, 'js', 'MainMenuScene.js'), 'utf8');
-        const mainJs = fs.readFileSync(path.join(ROOT, 'js', 'Main.js'), 'utf8');
+        const mainJs = readMainLayerSource();
         return mm.indexOf('fillText') === -1 && mm.indexOf('strokeText') === -1
             && mainJs.indexOf("ctx.fillText('按任意键开始游戏'") === -1
             && mainJs.indexOf("ctx.fillText('修仙者模拟器：飘途'") === -1

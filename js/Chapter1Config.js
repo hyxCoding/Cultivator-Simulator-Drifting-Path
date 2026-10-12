@@ -756,7 +756,7 @@ class Chapter1Config {
             //   '.' = 白色（可通行，即平台地面）    '#' = 黑色（不可通行，即悬崖/云雾）
             // 需要重新生成时（改过 collision.png 之后）：用 http 方式打开游戏（或给浏览器
             // 加 --allow-file-access-from-files），在控制台执行下面这行，再把输出同步到本表：
-            //   console.log(mapManager.getMap('boss_arena_ch1').getWalkableGrid()
+            //   Logger.log(mapManager.getMap('boss_arena_ch1').getWalkableGrid()
             //       .map(r => r.map(v => v ? '.' : '#').join('')).join('\n'))
             // 表中的每一行依次对应图片自上而下 40px 高的瓦片行（行 0 = 图片顶部）。
             boss_arena_ch1: {
@@ -798,17 +798,15 @@ class Chapter1Config {
                 //   x / y       —— 瓦片坐标（tileToWorld 换算为世界坐标，作为精灵图中心）
                 //   monsterId   —— GameConfig.monsters 中的键（气血/伤害/防御等基础属性）
                 //   ai          —— 'shanxiao' 时启用专属 AI（行为树 + 轴对齐 A* 寻路）
-                //   tuning      —— 覆盖 ShanxiaoBoss.DEFAULT_TUNING（速度/判定半径/冷却等）
+                //   tuning      —— 可选：只写需要覆盖 ShanxiaoBoss.DEFAULT_TUNING 的字段
+                //                  （速度/判定半径/冷却等）。本 Boss 全部使用类内默认值，
+                //                  故此处留空——唯一来源见 js/ShanxiaoBoss.js 的 DEFAULT_TUNING。
+                //                  如需按章节单独调平衡，在此补 { 字段: 值 } 即可（其余自动继承）。
                 bossPosition: {
                     boss_shanxiao: {
                         x: 24, y: 6,
                         monsterId: 'boss_shanxiao',
                         ai: 'shanxiao',
-                        tuning: {
-                            moveSpeed: 120,      // 追击速度（像素/秒）
-                            sweepRadius: 120,    // 横扫判定圆半径
-                            pounceRadius: 130,   // 扑击落地判定圆半径
-                        },
                     },
                 },
             },

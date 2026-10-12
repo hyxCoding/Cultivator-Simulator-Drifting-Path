@@ -543,7 +543,7 @@ class Boss extends Monster {
             return false;
         }
         
-        const actualDamage = Math.max(1, damage - this.defense);
+        const actualDamage = GameConfig.getInstance().calculateDamage(damage, this.defense);
         this.health -= actualDamage;
         
         // 减少韧性
@@ -652,18 +652,10 @@ class Boss extends Monster {
         if (!this.isAlive || !attackData || !attackData.rect) {
             return false;
         }
-        if (!Boss.rectsIntersect(attackData.rect, this.getHitRect())) {
+        if (!CollisionDetector.rectsIntersect(attackData.rect, this.getHitRect())) {
             return false;
         }
         return this.takeDamage(attackData.damage || 0, attackData.source);
-    }
-
-    /**
-     * 矩形相交判定
-     */
-    static rectsIntersect(a, b) {
-        return a.x < b.x + b.width && a.x + a.width > b.x
-            && a.y < b.y + b.height && a.y + a.height > b.y;
     }
 
     /**

@@ -4,6 +4,35 @@
  * 返回 JSON 字符串：断言在 smoke_chapter2.js 中。
  */
 (async function () {
+    // 冒烟测试用 PlayerData 桩：**字段与方法都要有**。
+    // 生产代码统一走 PlayerData 方法读写（PlayerCombat._checkCost/_pay、Player.useItem、
+    // Main.renderBattle），所以桩必须提供 getHealth/getMana/changeHealth/changeMana 等，
+    // 否则会掩盖真实调用（历史教训：桩缺 getMana 曾迫使生产代码回退成直接读字段）。
+    function makePlayerDataStub(overrides = {}) {
+        const pd = Object.assign({
+            realm: 'lianqi', stage: '初期', health: 100, maxHealth: 100,
+            mana: 50, maxMana: 50, lingShi: 0, experience: 0,
+            bossFailures: {}, maxHealthBonus: 0, maxManaBonus: 0,
+            basicSkillPoints: 0, professionSkillPoints: 0,
+            statistics: { totalItemsUsed: 0, totalDeaths: 0 },
+        }, overrides);
+        pd.getHealth = () => pd.health;
+        pd.getMaxHealth = () => pd.maxHealth;
+        pd.getMana = () => pd.mana;
+        pd.getMaxMana = () => pd.maxMana;
+        pd.getHealthRatio = () => (pd.maxHealth > 0 ? Math.max(0, Math.min(1, pd.health / pd.maxHealth)) : 0);
+        pd.getManaRatio = () => (pd.maxMana > 0 ? Math.max(0, Math.min(1, pd.mana / pd.maxMana)) : 0);
+        pd.setHealth = (v) => { pd.health = Math.max(0, Math.min(pd.maxHealth, v)); return pd.health; };
+        pd.setMana = (v) => { pd.mana = Math.max(0, Math.min(pd.maxMana, v)); return pd.mana; };
+        pd.changeHealth = (d) => { const b = pd.health; pd.setHealth(pd.health + d); return pd.health - b; };
+        pd.changeMana = (d) => { const b = pd.mana; pd.setMana(pd.mana + d); return pd.mana - b; };
+        pd.refill = () => { pd.health = pd.maxHealth; pd.mana = pd.maxMana; };
+        pd.gainLingShi = (n) => { pd.lingShi += n; };
+        pd.spendLingShi = (n) => (pd.lingShi >= n ? (pd.lingShi -= n, true) : false);
+        pd.updatePlayTime = () => {};
+        return pd;
+    }
+
     const R = {};
     // 音频节流时钟：AudioManager 现在对「同一种音效」设了最小间隔（SFX_MIN_INTERVAL = 0.2 秒，
     // 防同一帧被播两次 / 连点重复出声）。冒烟测试里所有帧、所有点击都在同一瞬间跑完，
@@ -455,7 +484,7 @@
     const main = new Main();
     main.player = new Player({
         position: { x: 400, y: 1520 },
-        playerData: { realm: 'zhuji', stage: '圆满', health: 200, maxHealth: 200, mana: 100, maxMana: 100, lingShi: 0 },
+        playerData: makePlayerDataStub({ realm: 'zhuji', stage: '圆满', health: 200, maxHealth: 200, mana: 100, maxMana: 100, lingShi: 0 }),
         profession: { professionId: 'sanxiu' },
     });
     main.inputManager = new InputManager(window, null);
@@ -622,8 +651,10 @@
     R.gates.boatSignAtM4 = boatSign ? boatSign.isActive : null;
 
     const e2System = chapter1Done();
+    // 走公开 API 推进（QuestSystem 已把状态收敛到 QuestStateMachine，quests 访问器为只读副本，
+    // 不能再直接 quests.set 写内部状态）；finish 会依次接取 + 推进目标 + 结算完成。
     ['chapter2_main_1', 'chapter2_main_2', 'chapter2_main_3', 'chapter2_main_4', 'chapter2_ending_1']
-        .forEach(id => { e2System.quests.set(id, { questId: id, state: 'completed', objectives: [], acceptedTime: 1, completedTime: 2 }); });
+        .forEach(id => finish(e2System, id));
     e2System.acceptQuest('chapter2_ending_2');
     boatSign.updateQuestGate(e2System);
     R.gates.boatSignAfterAccept = boatSign.isActive;
@@ -1532,7 +1563,7 @@
         isInBattle: false,
         isInteracting: false,
         moveSpeed: 200,
-        playerData: { health: 200, maxHealth: 200, mana: 200, maxMana: 200 },
+        playerData: makePlayerDataStub({ health: 200, maxHealth: 200, mana: 200, maxMana: 200 }),
         professionSystem: {
             getAttackDamage: () => 10,
             getSkillLevel: (id) => (id === 'jianying' ? jyState.learned : 0),
@@ -2525,7 +2556,7 @@
         main.audioManager = manager;
         main.player = new Player({
             position: { x: 843, y: 368 },
-            playerData: { realm: 'zhuji', stage: '圆满', health: 200, maxHealth: 200, mana: 100, maxMana: 100, lingShi: 0 },
+            playerData: makePlayerDataStub({ realm: 'zhuji', stage: '圆满', health: 200, maxHealth: 200, mana: 100, maxMana: 100, lingShi: 0 }),
             profession: { professionId: 'sanxiu' },
         });
         let input = { keys: {}, pressedKeys: {} };
@@ -2685,7 +2716,7 @@
         main.audioManager = manager;
         main.player = new Player({
             position: { x: 843, y: 368 },
-            playerData: { realm: 'zhuji', stage: '圆满', health: 200, maxHealth: 200, mana: 100, maxMana: 100, lingShi: 0 },
+            playerData: makePlayerDataStub({ realm: 'zhuji', stage: '圆满', health: 200, maxHealth: 200, mana: 100, maxMana: 100, lingShi: 0 }),
             profession: { professionId: 'sanxiu' },
         });
         main.player.questSystem = null;      // 本段只验证小游戏 / 对白 / 输入，跳过任务推进

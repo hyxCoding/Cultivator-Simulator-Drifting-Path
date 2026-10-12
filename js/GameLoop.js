@@ -189,49 +189,42 @@ class GameLoop {
             this.player.update(deltaTime, input, this.currentMap);
         }
         
-        // 3. 更新NPC
+        // 3~5c. 更新地图实体
+        // ⚠ 这些容器在 GameMap 里都是 Map（见 GameMap.js 构造函数），**没有 length / [i]**：
+        //    必须用 Map 迭代（values()/entries()），写成 `X.length` 的索引 for 会静默空转，
+        //    导致 NPC / 怪物 / 拾取物 / 路标 / 调查点全部不更新。见下方同名注释。
         if (this.currentMap && this.currentMap.npcs) {
-            this.currentMap.npcs.forEach(npc => {
-                if (npc.update) {
-                    npc.update(deltaTime, this.currentMap);
-                }
-            });
+            for (const npc of this.currentMap.npcs.values()) {
+                if (npc && npc.update) npc.update(deltaTime, this.currentMap);
+            }
         }
         
         // 4. 更新普通怪物
         if (this.currentMap && this.currentMap.monsters) {
-            this.currentMap.monsters.forEach(monster => {
-                if (monster.update) {
-                    monster.update(deltaTime, this.currentMap);
-                }
-            });
+            for (const monster of this.currentMap.monsters.values()) {
+                if (monster && monster.update) monster.update(deltaTime, this.currentMap);
+            }
         }
         
         // 5. 更新可拾取物品（浮动动画等）
         if (this.currentMap && this.currentMap.pickupItems) {
-            this.currentMap.pickupItems.forEach(pickup => {
-                if (pickup.update) {
-                    pickup.update(deltaTime);
-                }
-            });
+            for (const pickup of this.currentMap.pickupItems.values()) {
+                if (pickup && pickup.update) pickup.update(deltaTime);
+            }
         }
 
         // 5b. 更新路标（浮动动画等）
         if (this.currentMap && this.currentMap.signposts) {
-            this.currentMap.signposts.forEach(signpost => {
-                if (signpost && signpost.update) {
-                    signpost.update(deltaTime);
-                }
-            });
+            for (const signpost of this.currentMap.signposts.values()) {
+                if (signpost && signpost.update) signpost.update(deltaTime);
+            }
         }
         
         // 5c. 更新调查点（镇风桩 / 破损运灯箱，高亮脉动等）
         if (this.currentMap && this.currentMap.windPiles) {
-            this.currentMap.windPiles.forEach(windPile => {
-                if (windPile && windPile.update) {
-                    windPile.update(deltaTime);
-                }
-            });
+            for (const windPile of this.currentMap.windPiles.values()) {
+                if (windPile && windPile.update) windPile.update(deltaTime);
+            }
         }
 
         // 6. 更新地图场景动画（飘落物（落叶 / 落花）、飘动等环境效果）
@@ -251,9 +244,11 @@ class GameLoop {
         }
         
         // 8. 执行额外更新回调
-        this.extraUpdateCallbacks.forEach(callback => {
-            callback(deltaTime, input);
-        });
+        // 性能：回调列表一般很短，用索引 for 避免每帧闭包分配
+        const updateCallbacks = this.extraUpdateCallbacks;
+        for (let i = 0, n = updateCallbacks.length; i < n; i++) {
+            updateCallbacks[i](deltaTime, input);
+        }
         
         // 更新调试信息
         if (this.debugMode) {
@@ -286,39 +281,32 @@ class GameLoop {
         }
         
         // 2. 渲染NPC
+        // ⚠ 同 update：容器是 Map，只能用 Map 迭代（values()），不能用 .length / [i]。
         if (this.currentMap && this.currentMap.npcs) {
-            this.currentMap.npcs.forEach(npc => {
-                if (npc.render) {
-                    npc.render(this.ctx, this.camera);
-                }
-            });
+            for (const npc of this.currentMap.npcs.values()) {
+                if (npc && npc.render) npc.render(this.ctx, this.camera);
+            }
         }
         
         // 3. 渲染怪物
         if (this.currentMap && this.currentMap.monsters) {
-            this.currentMap.monsters.forEach(monster => {
-                if (monster.render) {
-                    monster.render(this.ctx, this.camera);
-                }
-            });
+            for (const monster of this.currentMap.monsters.values()) {
+                if (monster && monster.render) monster.render(this.ctx, this.camera);
+            }
         }
 
         // 3b. 渲染调查点（镇风桩 / 破损运灯箱，常驻显示）
         if (this.currentMap && this.currentMap.windPiles) {
-            this.currentMap.windPiles.forEach(windPile => {
-                if (windPile && windPile.render) {
-                    windPile.render(this.ctx, this.camera);
-                }
-            });
+            for (const windPile of this.currentMap.windPiles.values()) {
+                if (windPile && windPile.render) windPile.render(this.ctx, this.camera);
+            }
         }
 
         // 4. 渲染传送法阵
         if (this.currentMap && this.currentMap.teleporters) {
-            this.currentMap.teleporters.forEach(teleport => {
-                if (teleport && teleport.render) {
-                    teleport.render(this.ctx, this.camera);
-                }
-            });
+            for (const teleport of this.currentMap.teleporters.values()) {
+                if (teleport && teleport.render) teleport.render(this.ctx, this.camera);
+            }
         }
         
         // 5. 渲染玩家战斗特效（下层：气场类，位于角色之下、地图之上）
@@ -342,9 +330,10 @@ class GameLoop {
         }
         
         // 8. 执行额外渲染回调
-        this.extraRenderCallbacks.forEach(callback => {
-            callback(this.ctx, interpolation);
-        });
+        const renderCallbacks = this.extraRenderCallbacks;
+        for (let i = 0, n = renderCallbacks.length; i < n; i++) {
+            renderCallbacks[i](this.ctx, interpolation);
+        }
         
         // 渲染调试信息
         if (this.debugMode) {

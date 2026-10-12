@@ -284,7 +284,7 @@ class Shop {
         this.tabButtons.forEach(b => b.render(ctx));
         this.renderItemList(ctx, px, py, pw, ph);
         this.actionButtons.forEach(b => b.render(ctx));
-        if (this.messageText && this.messageTimer > 0) this.renderMessage(ctx, px, py, pw);
+        if (this.messageText && this.messageTimer > 0) this.renderMessage(ctx, px, py, pw, ph);
         ctx.fillStyle = 'rgba(255,255,255,0.4)'; ctx.font = '12px Microsoft YaHei'; ctx.textAlign = 'left';
         ctx.fillText('方向键 ↑↓ 选择  Enter 确认  ESC 关闭', px+20, py+ph-15);
         ctx.restore();
@@ -325,10 +325,13 @@ class Shop {
         ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fillRect(x, sy, sw, sh);
     }
 
-    renderMessage(ctx, px, py, pw) {
+    renderMessage(ctx, px, py, pw, ph) {
         ctx.save();
         const mw = 400, mh = 40;
-        const mx = px+(pw-mw)/2, my = py+ph-80;
+        // 修正（重构）：旧签名缺 ph 参数，函数体里却引用 ph → 每次弹出买卖提示都会抛
+        // ReferenceError，提示根本画不出来。这里补上参数，并给一个兜底高度。
+        const panelH = typeof ph === 'number' ? ph : 400;
+        const mx = px+(pw-mw)/2, my = py+panelH-80;
         ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fillRect(mx, my, mw, mh);
         ctx.strokeStyle = 'rgba(255,215,0,0.5)'; ctx.lineWidth = 1; ctx.strokeRect(mx, my, mw, mh);
         ctx.fillStyle = '#f0d080'; ctx.font = '16px Microsoft YaHei'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';

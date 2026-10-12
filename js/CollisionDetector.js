@@ -31,22 +31,42 @@ class CollisionDetector {
     }
 
     /**
+     * 矩形相交判定（aabb 的语义化别名）
+     * 供 Boss / 战斗代码使用，避免各处再自写一份「矩形相交」。
+     * @param {Object} a - 矩形 {x, y, width, height}
+     * @param {Object} b - 矩形 {x, y, width, height}
+     * @returns {boolean}
+     */
+    static rectsIntersect(a, b) {
+        return CollisionDetector.aabb(a, b);
+    }
+
+    /**
+     * 圆形与矩形碰撞检测（边界包含）
+     * 与 circleRect 的差别：此处用 <=（圆周正好切到矩形边也算命中），
+     * 与 Boss / PlayerCombat 原有的圆形攻击判定语义一致。
+     * @param {Object} center - 圆心 {x, y}
+     * @param {number} radius - 半径
+     * @param {Object} rect - 矩形 {x, y, width, height}
+     * @returns {boolean}
+     */
+    static circleIntersectsRect(center, radius, rect) {
+        // 找到矩形上距离圆心最近的点
+        const closestX = Math.max(rect.x, Math.min(center.x, rect.x + rect.width));
+        const closestY = Math.max(rect.y, Math.min(center.y, rect.y + rect.height));
+        const dx = closestX - center.x;
+        const dy = closestY - center.y;
+        return dx * dx + dy * dy <= radius * radius;
+    }
+
+    /**
      * 圆形与矩形碰撞检测
      * @param {Object} circle - 圆形 {x, y, radius}
      * @param {Object} rect - 矩形 {x, y, width, height}
      * @returns {boolean} 是否发生碰撞
      */
     static circleRect(circle, rect) {
-        // 找到矩形上距离圆心最近的点
-        const closestX = Math.max(rect.x, Math.min(circle.x, rect.x + rect.width));
-        const closestY = Math.max(rect.y, Math.min(circle.y, rect.y + rect.height));
-        
-        // 计算距离
-        const distanceX = circle.x - closestX;
-        const distanceY = circle.y - closestY;
-        
-        // 判断距离是否小于半径
-        return (distanceX * distanceX + distanceY * distanceY) < (circle.radius * circle.radius);
+        return CollisionDetector.circleIntersectsRect(circle, circle.radius, rect);
     }
 
     /**

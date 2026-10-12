@@ -61,8 +61,9 @@ class DueMinion {
     }
 
     /**
-     * 默认数值（可在 DueBoss.DEFAULT_TUNING.minion 或 Chapter2Config 的
-     * bossPosition[...].tuning.minion 中覆盖）
+     * 小兵数值唯一来源（Single Source of Truth）。
+     * DueBoss.DEFAULT_TUNING.minion 或 Chapter2Config 的 tuning.minion 仅用于覆盖个别字段，
+     * 不再逐条重复本表——改数值只需改这里一处。
      */
     static get DEFAULT_TUNING() {
         return {
@@ -106,10 +107,12 @@ class DueMinion {
         this.monsterConfig = gameConfig.getMonster(this.monsterId) || {};
         this.tuning = Object.assign({}, DueMinion.DEFAULT_TUNING, config.tuning || {});
 
-        this.maxHealth = config.maxHealth || this.monsterConfig.health || 60;
+        // 数值一律来自章节配置（Chapter2Config.boss_due_minion），兜底取 GameConfig.monsterDefaults
+        const monDefaults = gameConfig.getMonsterDefaults();
+        this.maxHealth = config.maxHealth || this.monsterConfig.health || monDefaults.health;
         this.health = this.maxHealth;
-        this.damage = config.damage || this.monsterConfig.damage || 8;
-        this.defense = config.defense || this.monsterConfig.defense || 2;
+        this.damage = config.damage || this.monsterConfig.damage || monDefaults.damage;
+        this.defense = config.defense || this.monsterConfig.defense || monDefaults.defense;
 
         this.position = {
             x: (config.position && config.position.x) || 0,
@@ -727,7 +730,7 @@ class DueMinion {
     takeDamage(damage, source) {
         if (!this.isAlive || !damage || damage <= 0) return false;
 
-        const actualDamage = Math.max(1, Math.round(damage - this.defense));
+        const actualDamage = GameConfig.getInstance().calculateDamage(damage, this.defense);
         this.health = Math.max(0, this.health - actualDamage);
 
         this.isHit = true;
@@ -754,21 +757,6 @@ class DueMinion {
     }
 
     /**
-     * 圆与矩形相交（用于圆形攻击判定）
-     * @param {Object} center - 圆心 {x, y}
-     * @param {number} radius - 半径
-     * @param {Object} rect - 矩形 {x, y, width, height}
-     * @returns {boolean}
-     */
-    static circleIntersectsRect(center, radius, rect) {
-        const closestX = Math.max(rect.x, Math.min(center.x, rect.x + rect.width));
-        const closestY = Math.max(rect.y, Math.min(center.y, rect.y + rect.height));
-        const dx = closestX - center.x;
-        const dy = closestY - center.y;
-        return dx * dx + dy * dy <= radius * radius;
-    }
-
-    /**
      * 以本体为中心结算一次圆形范围伤害
      * @param {number} radius - 判定半径（像素）
      * @returns {boolean} 是否命中玩家
@@ -778,7 +766,7 @@ class DueMinion {
         let hit = false;
 
         if (target && target.position && target.isAlive !== false) {
-            hit = DueMinion.circleIntersectsRect(
+            hit = CollisionDetector.circleIntersectsRect(
                 { x: this.position.x, y: this.position.y },
                 radius,
                 {
@@ -805,19 +793,8 @@ class DueMinion {
      */
     handlePlayerAttack(attackData) {
         if (!this.isAlive || !attackData || !attackData.rect) return false;
-        if (!DueMinion.rectsIntersect(attackData.rect, this.getHitRect())) return false;
+        if (!CollisionDetector.rectsIntersect(attackData.rect, this.getHitRect())) return false;
         return this.takeDamage(attackData.damage || 0, attackData.source);
-    }
-
-    /**
-     * 矩形相交
-     * @param {Object} a
-     * @param {Object} b
-     * @returns {boolean}
-     */
-    static rectsIntersect(a, b) {
-        return a.x < b.x + b.width && a.x + a.width > b.x
-            && a.y < b.y + b.height && a.y + a.height > b.y;
     }
 
     // ==================== 渲染 / 存档 / 清理 ====================
@@ -915,7 +892,9 @@ class DueBoss {
     static get DEAD_FRAMES() { return 6; }
 
     /**
-     * 默认数值（可在 Chapter2Config 的 bossPosition[...].tuning 中覆盖）
+     * 渡厄使数值唯一来源（Single Source of Truth）。
+     * Chapter2Config 的 bossPosition[...].tuning 仅用于按章节覆盖个别字段，
+     * 不再逐条重复本表——改数值只需改这里一处。
      */
     static get DEFAULT_TUNING() {
         return {
@@ -978,13 +957,16 @@ class DueBoss {
         this.name = config.name || this.monsterConfig.name || '渡厄使';
 
         this.realm = this.monsterConfig.realm || 'zhuji';
-        this.maxHealth = config.maxHealth || this.monsterConfig.health || 400;
+        // 数值一律来自章节配置（Chapter2Config.boss_due，health 500），兜底取 GameConfig.monsterDefaults
+        const monDefaults = gameConfig.getMonsterDefaults();
+        this.maxHealth = config.maxHealth || this.monsterConfig.health || monDefaults.health;
         this.health = this.maxHealth;
-        this.damage = config.damage || this.monsterConfig.damage || 26;
-        this.defense = config.defense || this.monsterConfig.defense || 8;
-        this.expReward = this.monsterConfig.expReward || 150;
-        this.lingShiReward = this.monsterConfig.lingShiReward || 400;
-        this.drops = this.monsterConfig.drops || [];
+        this.damage = config.damage || this.monsterConfig.damage || monDefaults.damage;
+        this.defense = config.defense || this.monsterConfig.defense || monDefaults.defense;
+        this.expReward = this.monsterConfig.expReward || monDefaults.expReward;
+        this.lingShiReward = this.monsterConfig.lingShiReward || monDefaults.lingShiReward;
+        // 掉落字段兼容 drops / dropItems（Chapter2Config 用的是 dropItems）
+        this.drops = this.monsterConfig.drops || this.monsterConfig.dropItems || [];
 
         this.position = {
             x: (config.position && config.position.x) || 0,
@@ -1296,7 +1278,7 @@ class DueBoss {
             }
         }
 
-        console.log(`[DueBoss] 入场冻结 ${this.introLock ? '开启（对白期间不移动 / 不出手）' : '解除'}`);
+        Logger.log(`[DueBoss] 入场冻结 ${this.introLock ? '开启（对白期间不移动 / 不出手）' : '解除'}`);
     }
 
     /**
@@ -1842,7 +1824,7 @@ class DueBoss {
             this.map.monsters.set(minion.id, minion);   // 进 monsters：GameLoop 统一 update / render
         }
 
-        console.log(`[渡厄使] 召唤小兵 ${minion.id}`
+        Logger.log(`[渡厄使] 召唤小兵 ${minion.id}`
             + `（场上 ${this.aliveMinionCount()} / ${this.tuning.summonMaxMinions}）`);
 
         if (this.onSummon) this.onSummon(this, minion);
@@ -1920,7 +1902,7 @@ class DueBoss {
         // 战败音效：与战败动画同一时刻
         this._playSfx('sfx.boss_due_defeat');
 
-        console.log('[渡厄使] 战败');
+        Logger.log('[渡厄使] 战败');
     }
 
     /**
@@ -2093,7 +2075,7 @@ class DueBoss {
     takeDamage(damage, source) {
         if (!this.isAlive || !damage || damage <= 0) return false;
 
-        const actualDamage = Math.max(1, Math.round(damage - this.defense));
+        const actualDamage = GameConfig.getInstance().calculateDamage(damage, this.defense);
         this.health = Math.max(0, this.health - actualDamage);
 
         // 受击闪烁
@@ -2137,35 +2119,9 @@ class DueBoss {
         });
 
         if (!this.isAlive) return false;
-        if (!DueBoss.rectsIntersect(attackData.rect, this.getHitRect())) return false;
+        if (!CollisionDetector.rectsIntersect(attackData.rect, this.getHitRect())) return false;
 
         return this.takeDamage(attackData.damage || 0, attackData.source);
-    }
-
-    /**
-     * 矩形相交
-     * @param {Object} a
-     * @param {Object} b
-     * @returns {boolean}
-     */
-    static rectsIntersect(a, b) {
-        return a.x < b.x + b.width && a.x + a.width > b.x
-            && a.y < b.y + b.height && a.y + a.height > b.y;
-    }
-
-    /**
-     * 圆与矩形相交（用于圆形攻击判定）
-     * @param {Object} center - 圆心 {x, y}
-     * @param {number} radius - 半径
-     * @param {Object} rect - 矩形 {x, y, width, height}
-     * @returns {boolean}
-     */
-    static circleIntersectsRect(center, radius, rect) {
-        const closestX = Math.max(rect.x, Math.min(center.x, rect.x + rect.width));
-        const closestY = Math.max(rect.y, Math.min(center.y, rect.y + rect.height));
-        const dx = closestX - center.x;
-        const dy = closestY - center.y;
-        return dx * dx + dy * dy <= radius * radius;
     }
 
     /**
@@ -2178,7 +2134,7 @@ class DueBoss {
         let hit = false;
 
         if (target && target.position && target.isAlive !== false) {
-            hit = DueBoss.circleIntersectsRect(
+            hit = CollisionDetector.circleIntersectsRect(
                 { x: this.position.x, y: this.position.y },
                 radius,
                 {
@@ -2384,9 +2340,9 @@ class DueBoss {
 
             if (this.releaseResources && resourceManager.releaseResourceGroup) {
                 const released = resourceManager.releaseResourceGroup('bossArenaCh2');
-                console.log(`[渡厄使] 已清理 Boss 资源（释放 ${released} 张精灵图缓存）`);
+                Logger.log(`[渡厄使] 已清理 Boss 资源（释放 ${released} 张精灵图缓存）`);
             } else {
-                console.log('[渡厄使] 已清理 Boss 资源（保留图片缓存）');
+                Logger.log('[渡厄使] 已清理 Boss 资源（保留图片缓存）');
             }
         }
 

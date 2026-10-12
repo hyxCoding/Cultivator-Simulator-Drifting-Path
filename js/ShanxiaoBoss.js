@@ -144,7 +144,9 @@ class ShanxiaoBoss {
     static get DEAD_FRAMES() { return 6; }
 
     /**
-     * 默认数值（可在 Chapter1Config 的 bossPosition[...].tuning 中覆盖）
+     * 山魈数值唯一来源（Single Source of Truth）。
+     * Chapter1Config 的 bossPosition[...].tuning 仅用于「按章节覆盖」个别字段，
+     * 不再逐条重复本表——改数值只需改这里一处。
      */
     static get DEFAULT_TUNING() {
         return {
@@ -201,15 +203,16 @@ class ShanxiaoBoss {
         this.tuning = Object.assign({}, ShanxiaoBoss.DEFAULT_TUNING, config.tuning || {});
 
         // ========== 属性 ==========
+        // 数值一律来自章节配置（Chapter1Config.boss_shanxiao），兜底取 GameConfig.monsterDefaults
+        const monDefaults = gameConfig.getMonsterDefaults();
         this.realm = this.monsterConfig.realm || 'lianqi';
-        this.maxHealth = config.maxHealth || this.monsterConfig.health || 300;
-        //this.maxHealth = 1;//调试阶段写1，后续要删除
+        this.maxHealth = config.maxHealth || this.monsterConfig.health || monDefaults.health;
         this.health = this.maxHealth;
-        this.damage = config.damage || this.monsterConfig.damage || 20;
-        this.defense = config.defense || this.monsterConfig.defense || 5;
-        this.expReward = this.monsterConfig.expReward || 100;
-        this.lingShiReward = this.monsterConfig.lingShiReward || 200;
-        this.drops = this.monsterConfig.drops || [];
+        this.damage = config.damage || this.monsterConfig.damage || monDefaults.damage;
+        this.defense = config.defense || this.monsterConfig.defense || monDefaults.defense;
+        this.expReward = this.monsterConfig.expReward || monDefaults.expReward;
+        this.lingShiReward = this.monsterConfig.lingShiReward || monDefaults.lingShiReward;
+        this.drops = this.monsterConfig.drops || this.monsterConfig.dropItems || [];
 
         // ========== 位置 / 碰撞 ==========
         this.position = {
@@ -1055,7 +1058,7 @@ class ShanxiaoBoss {
         if (this.isCurrentAnimationFinished() && !this.isCharged) {
             this.isCharged = true;
             this.stopChargeWind();
-            console.log('[摄风山魈] 蓄力完成 → 下一次扑击将被强化');
+            Logger.log('[摄风山魈] 蓄力完成 → 下一次扑击将被强化');
         }
     }
 
@@ -1187,7 +1190,7 @@ class ShanxiaoBoss {
         // 战败音效：与战败动画同一时刻
         this._playSfx('sfx.boss_shanxiao_defeat');
 
-        console.log('[摄风山魈] 战败');
+        Logger.log('[摄风山魈] 战败');
     }
 
     /**
@@ -1248,7 +1251,7 @@ class ShanxiaoBoss {
             return false;
         }
 
-        const actualDamage = Math.max(1, Math.round(damage - this.defense));
+        const actualDamage = GameConfig.getInstance().calculateDamage(damage, this.defense);
         this.health = Math.max(0, this.health - actualDamage);
 
         // 受击闪烁
@@ -1287,36 +1290,10 @@ class ShanxiaoBoss {
         if (!this.isAlive || !attackData || !attackData.rect) {
             return false;
         }
-        if (!ShanxiaoBoss.rectsIntersect(attackData.rect, this.getHitRect())) {
+        if (!CollisionDetector.rectsIntersect(attackData.rect, this.getHitRect())) {
             return false;
         }
         return this.takeDamage(attackData.damage || 0, attackData.source);
-    }
-
-    /**
-     * 矩形相交
-     * @param {Object} a
-     * @param {Object} b
-     * @returns {boolean}
-     */
-    static rectsIntersect(a, b) {
-        return a.x < b.x + b.width && a.x + a.width > b.x
-            && a.y < b.y + b.height && a.y + a.height > b.y;
-    }
-
-    /**
-     * 圆与矩形相交（用于圆形攻击判定）
-     * @param {Object} center - 圆心 {x, y}
-     * @param {number} radius - 半径
-     * @param {Object} rect - 矩形 {x, y, width, height}
-     * @returns {boolean}
-     */
-    static circleIntersectsRect(center, radius, rect) {
-        const closestX = Math.max(rect.x, Math.min(center.x, rect.x + rect.width));
-        const closestY = Math.max(rect.y, Math.min(center.y, rect.y + rect.height));
-        const dx = closestX - center.x;
-        const dy = closestY - center.y;
-        return dx * dx + dy * dy <= radius * radius;
     }
 
     /**
@@ -1330,7 +1307,7 @@ class ShanxiaoBoss {
 
         let hit = false;
         if (canHit) {
-            hit = ShanxiaoBoss.circleIntersectsRect(
+            hit = CollisionDetector.circleIntersectsRect(
                 { x: this.position.x, y: this.position.y },
                 radius,
                 {
@@ -1552,9 +1529,9 @@ class ShanxiaoBoss {
                     (this.animationSpecs || []).map(spec => spec.key)
                         .concat(['effects.boss_pounce_dust', 'effects.boss_charge_wind'])
                 );
-            console.log(`[摄风山魈] 已清理 Boss 资源（释放 ${released} 张精灵图缓存）`);
+            Logger.log(`[摄风山魈] 已清理 Boss 资源（释放 ${released} 张精灵图缓存）`);
         } else {
-            console.log('[摄风山魈] 已清理 Boss 资源（保留图片缓存）');
+            Logger.log('[摄风山魈] 已清理 Boss 资源（保留图片缓存）');
         }
 
         if (this.animationManager) {

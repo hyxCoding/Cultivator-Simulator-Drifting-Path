@@ -4,6 +4,33 @@
  * 返回值：断言所需的原始数据（断言本身在 smoke_chapter_end.js 中）。
  */
 (async function () {
+    // 冒烟测试用 PlayerData 桩：**字段与方法都要有**（生产代码统一走方法读写，
+    // 见 PlayerCombat._checkCost/_pay、Player.useItem、Main.renderBattle）。
+    function makePlayerDataStub(overrides = {}) {
+        const pd = Object.assign({
+            realm: 'lianqi', stage: '初期', health: 100, maxHealth: 100,
+            mana: 50, maxMana: 50, lingShi: 0, experience: 0,
+            bossFailures: {}, maxHealthBonus: 0, maxManaBonus: 0,
+            basicSkillPoints: 0, professionSkillPoints: 0,
+            statistics: { totalItemsUsed: 0, totalDeaths: 0 },
+        }, overrides);
+        pd.getHealth = () => pd.health;
+        pd.getMaxHealth = () => pd.maxHealth;
+        pd.getMana = () => pd.mana;
+        pd.getMaxMana = () => pd.maxMana;
+        pd.getHealthRatio = () => (pd.maxHealth > 0 ? Math.max(0, Math.min(1, pd.health / pd.maxHealth)) : 0);
+        pd.getManaRatio = () => (pd.maxMana > 0 ? Math.max(0, Math.min(1, pd.mana / pd.maxMana)) : 0);
+        pd.setHealth = (v) => { pd.health = Math.max(0, Math.min(pd.maxHealth, v)); return pd.health; };
+        pd.setMana = (v) => { pd.mana = Math.max(0, Math.min(pd.maxMana, v)); return pd.mana; };
+        pd.changeHealth = (d) => { const b = pd.health; pd.setHealth(pd.health + d); return pd.health - b; };
+        pd.changeMana = (d) => { const b = pd.mana; pd.setMana(pd.mana + d); return pd.mana - b; };
+        pd.refill = () => { pd.health = pd.maxHealth; pd.mana = pd.maxMana; };
+        pd.gainLingShi = (n) => { pd.lingShi += n; };
+        pd.spendLingShi = (n) => (pd.lingShi >= n ? (pd.lingShi -= n, true) : false);
+        pd.updatePlayTime = () => {};
+        return pd;
+    }
+
     const results = {};
 
     // ============ 章节注册 + 任务链 ============
@@ -183,7 +210,7 @@
         isInteracting: false,
         isAlive: true,
         width: 24, height: 32,
-        playerData: { realm: 'lianqi', stage: '圆满', maxHealth: 200, mana: 200, health: 200 },
+        playerData: makePlayerDataStub({ realm: 'lianqi', stage: '圆满', maxHealth: 200, mana: 200, health: 200 }),
         animationManager: { setDirection() {}, play() {}, hasAnimation: () => false },
         questSystem: qsMain,
         playIdleAnimation() {},
@@ -239,7 +266,9 @@
 
     // ---- 触发筑基调息（模拟玩家在 breakthrough_ready 里选“开始筑基”） ----
     main.startFoundationTrial(qibo);
-    await new Promise(r => setTimeout(r, 20));   // 等 setTimeout(0) 内的锁定生效
+    // 剧情时间轴：`at: 0` 的步骤在**下一帧 updateGameWorld** 里执行（替代原 setTimeout(0)）。
+    // 用 deltaTime=0 推进一帧：只让时间轴落地（完成输入锁定），不让气场计时前进。
+    main.updateGameWorld(0, { pressedKeys: {}, keys: {}, mouseX: 0, mouseY: 0, mouseClicked: false });
     // 让气场走一帧（真实游戏里 GameLoop 每帧都会 update），以校验跟随定位
     main.playerCombat.update(0.016, { pressedKeys: {} });
 
@@ -736,7 +765,7 @@
     const trainingPlayer = {
         position: trainingZonePos('attack'),
         isAlive: true,
-        playerData: { health: 100, maxHealth: 100, mana: 50, maxMana: 100 },
+        playerData: makePlayerDataStub({ health: 100, maxHealth: 100, mana: 50, maxMana: 100 }),
         professionSystem: { getAttackDamage: () => 10 },
         restoreMana(amount) {
             this.playerData.mana = Math.min(this.playerData.maxMana, this.playerData.mana + amount);
@@ -1121,10 +1150,10 @@
         // 用真实 Player 顶替主线里那个精简桩（清场要读 / 写 moveSpeed、revive 等真实接口）
         main.player = new Player({
             position: { x: 1000, y: 600 },
-            playerData: {
+            playerData: makePlayerDataStub({
                 realm: 'lianqi', stage: '圆满', health: 150, maxHealth: 150,
                 mana: 70, maxMana: 70, lingShi: 0,
-            },
+            }),
             profession: { professionId: 'sanxiu' },
         });
         const combat = main.playerCombat;              // 真实 PlayerCombatSystem（构造时绑定同一个 Main）

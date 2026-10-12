@@ -104,14 +104,14 @@ class HerbCollectMiniGame extends MiniGame {
 
     _loadResources() {
         try {
-            const rm = ResourceManager.getInstance();
-            // 仅从缓存同步读取（Main.js 预加载保证图片已缓存）
-            const bg      = rm.getCachedImage('miniGame.caoyao_bg');
-            const wind    = rm.getCachedImage('miniGame.caoyao_wind');
-            const player  = rm.getCachedImage('player.sanxiu_walk');
-            const fly     = rm.getCachedImage('player.sanxiu_fly');
-            const idle    = rm.getCachedImage('player.sanxiu_idle');
-            const herb    = rm.getCachedImage('miniGame.caoyao_herb');
+            // 通过基类服务适配器取图（主游戏未注入服务时回落 ResourceManager 单例）——
+            // 小游戏不再直接依赖具体资源单例。仅从缓存同步读取（Main.js 预加载保证已缓存）。
+            const bg      = this.getServiceImage('miniGame.caoyao_bg');
+            const wind    = this.getServiceImage('miniGame.caoyao_wind');
+            const player  = this.getServiceImage('player.sanxiu_walk');
+            const fly     = this.getServiceImage('player.sanxiu_fly');
+            const idle    = this.getServiceImage('player.sanxiu_idle');
+            const herb    = this.getServiceImage('miniGame.caoyao_herb');
 
             if (bg)      this.bgImage = bg;
             if (wind)    this.windImage = wind;
@@ -137,11 +137,28 @@ class HerbCollectMiniGame extends MiniGame {
         return posList.map(p => ({ x: p.x, y: p.y, collected: false }));
     }
 
-    start() {
-        super.start();
+    /**
+     * 读取启动参数（主游戏在 start 时注入）。
+     * requiredHerbs：本次需要采集的草药数量（默认取生成的全部，即 8）。
+     * 后续若要「只采 5 株」的新任务，只需在 GameConfig.miniGames / 调用处传参，无需改本文件逻辑。
+     */
+    applyParams(params) {
+        this._requiredHerbsOverride = 0;
+        if (params && Number.isInteger(params.requiredHerbs) && params.requiredHerbs > 0) {
+            this._requiredHerbsOverride = params.requiredHerbs;
+        }
+    }
+
+    start(params, services) {
+        super.start(params, services);
         this.player.x = 300;
         this.player.y = 550;
         this.herbs = this._generateHerbs();
+        // 启动参数可限定本次采集数量（缺省 = 全部）
+        if (this._requiredHerbsOverride && this._requiredHerbsOverride < this.herbs.length) {
+            this.herbs = this.herbs.slice(0, this._requiredHerbsOverride);
+        }
+        this.requiredHerbs = this.herbs.length;
         this.collectedHerbs = 0;
         this.nearbyHerb = null;
         this.wind.active = false;
@@ -262,7 +279,7 @@ update(dt, input) {
                 this.wind.timer = 0;
                 this.wind.fadeAlpha = 0;
                 // 起风 → 循环播放小游戏背景音乐（风停 / 小游戏结束立刻停）
-                gameAudio.playBgm('bgm.minigame_herb');
+                this.playBgm('bgm.minigame_herb');
             }
         }
     }
@@ -277,7 +294,7 @@ update(dt, input) {
      * 重复调用无副作用（AudioManager.stopBgm 只停这一首，没在播就什么都不做）。
      */
     _stopWindBgm() {
-        gameAudio.stopBgm('bgm.minigame_herb');
+        this.stopBgm('bgm.minigame_herb');
     }
 
     _updateWindVisual(dt) {
@@ -433,7 +450,7 @@ update(dt, input) {
             this.score = (this.collectedHerbs / this.requiredHerbs) * this.maxScore;
             this.nearbyHerb = null;
             // 拾取音效：与拾取任务道具同一个音效（缺失音频文件时静默跳过）
-            gameAudio.playSfx('sfx.pickup');
+            this.playSfx('sfx.pickup');
         }
     }
 // ======================================================================

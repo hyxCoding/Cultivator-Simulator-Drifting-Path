@@ -487,7 +487,7 @@ class GameMap {
         // 已被击败过 → 本图不再生成 Boss（由 Main 在进场时按剧情标记设置）
         // 说明：战败未击败的情况不在此列，玩家可再次进场重试。
         if (this.arenaBossDefeated) {
-            console.log(`[GameMap] 战场 Boss 已被击败，本次进场不再生成`);
+            Logger.log(`[GameMap] 战场 Boss 已被击败，本次进场不再生成`);
             return null;
         }
 
@@ -520,7 +520,7 @@ class GameMap {
         this.monsters.set(bossKey, boss);
         this.arenaBoss = boss;
 
-        console.log(`[GameMap] 战场 Boss ${boss.name || bossKey} 已生成 `
+        Logger.log(`[GameMap] 战场 Boss ${boss.name || bossKey} 已生成 `
             + `(${Math.round(worldPosition.x)}, ${Math.round(worldPosition.y)})`);
         return boss;
     }
@@ -568,7 +568,7 @@ class GameMap {
             this.arenaBoss.setIntroLock(this.arenaIntroLock);
         }
 
-        console.log(`[GameMap] 战场 Boss ${this.arenaIntroLock ? '已冻结（战前对白）' : '已解冻'}`);
+        Logger.log(`[GameMap] 战场 Boss ${this.arenaIntroLock ? '已冻结（战前对白）' : '已解冻'}`);
     }
 
     /**
@@ -594,7 +594,7 @@ class GameMap {
         if (typeof boss.setIntroLock === 'function') {
             boss.setIntroLock(true);    // 万一被重新挂回场上也保持冻结，直到 startFight
         }
-        console.log('[GameMap] 战场 Boss 已撤下（战前对白期间不上场）');
+        Logger.log('[GameMap] 战场 Boss 已撤下（战前对白期间不上场）');
         return true;
     }
 
@@ -705,7 +705,7 @@ class GameMap {
         });
 
         this.teleporters.set(teleport.id, teleport);
-        console.log(`[GameMap] 战场归途法阵已生成于地图正中心 (${center.x}, ${center.y})`);
+        Logger.log(`[GameMap] 战场归途法阵已生成于地图正中心 (${center.x}, ${center.y})`);
         return teleport;
     }
 

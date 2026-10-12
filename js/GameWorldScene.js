@@ -9,7 +9,7 @@ class GameWorldScene extends Scene {
 
     enter(params = {}) {
         super.enter(params);
-        console.log('进入游戏世界');
+        Logger.log('进入游戏世界');
         
         // 激活当前地图
         if (this.main.currentMap) {

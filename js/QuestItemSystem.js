@@ -20,7 +20,7 @@ class QuestItemSystem {
     addItem(itemId, count = 1) {
         const current = this.items.get(itemId) || 0;
         this.items.set(itemId, current + count);
-        console.log(`[QuestItemSystem] 获得任务物品: ${itemId} x${count}，现有: ${current + count}`);
+        Logger.log(`[QuestItemSystem] 获得任务物品: ${itemId} x${count}，现有: ${current + count}`);
         if (this.onItemChanged) this.onItemChanged(itemId, this.items.get(itemId));
         return true;
     }
@@ -40,7 +40,7 @@ class QuestItemSystem {
         } else {
             this.items.set(itemId, remaining);
         }
-        console.log(`[QuestItemSystem] 消耗任务物品: ${itemId} x${count}，剩余: ${Math.max(0, remaining)}`);
+        Logger.log(`[QuestItemSystem] 消耗任务物品: ${itemId} x${count}，剩余: ${Math.max(0, remaining)}`);
         if (this.onItemChanged) this.onItemChanged(itemId, Math.max(0, remaining));
         return true;
     }

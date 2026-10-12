@@ -21,14 +21,18 @@ class Monster {
         this.monsterConfig = gameConfig.getMonster(this.monsterId) || {};
         
         // ========== 基本属性 ==========
+        // 数值优先取章节配置（monsterConfig），缺失时回落到 GameConfig.monsterDefaults（唯一兜底源），
+        // 类内不再写 50 / 10 / 0 这类与配置重复的魔数。
+        const monDefaults = gameConfig.getMonsterDefaults();
         this.realm = this.monsterConfig.realm || 'lianqi';
-        this.maxHealth = config.maxHealth || this.monsterConfig.health || 50;
+        this.maxHealth = config.maxHealth || this.monsterConfig.health || monDefaults.health;
         this.health = this.maxHealth;
-        this.damage = config.damage || this.monsterConfig.damage || 10;
-        this.defense = config.defense || this.monsterConfig.defense || 0;
-        this.expReward = this.monsterConfig.expReward || 10;
-        this.lingShiReward = this.monsterConfig.lingShiReward || 5;
-        this.drops = this.monsterConfig.drops || [];
+        this.damage = config.damage || this.monsterConfig.damage || monDefaults.damage;
+        this.defense = config.defense || this.monsterConfig.defense || monDefaults.defense;
+        this.expReward = this.monsterConfig.expReward || monDefaults.expReward;
+        this.lingShiReward = this.monsterConfig.lingShiReward || monDefaults.lingShiReward;
+        // 掉落字段兼容 drops / dropItems 两种写法（章节配置两种都出现过）
+        this.drops = this.monsterConfig.drops || this.monsterConfig.dropItems || [];
         
         // ========== 基本物理数据 ==========
         this.position = config.position || { x: 0, y: 0 };
@@ -218,8 +222,8 @@ class Monster {
             return false;
         }
         
-        // 计算实际伤害
-        const actualDamage = Math.max(1, damage - this.defense);
+        // 计算实际伤害（统一公式：GameConfig.calculateDamage，最少 1 点）
+        const actualDamage = GameConfig.getInstance().calculateDamage(damage, this.defense);
         this.health -= actualDamage;
         
         // 设置受击状态

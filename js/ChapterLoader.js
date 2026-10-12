@@ -28,7 +28,7 @@ class ChapterLoader {
 
         const chapterId = chapterData.meta.id;
         if (this.loadedChapters.has(chapterId)) {
-            console.log(`[ChapterLoader] 章节 ${chapterId} 已加载，跳过`);
+            Logger.log(`[ChapterLoader] 章节 ${chapterId} 已加载，跳过`);
             return true;
         }
 
@@ -46,13 +46,13 @@ class ChapterLoader {
                     // 同一 NPC 出现在多章（如阿禾）：深合并，保留前一章的美术 / 商店配置，
                     // 只把本章新增的对白、搬迁点、任务等并入（详见 _mergeConfig）
                     gameConfig.registeredNPCConfigs[npcId] = ChapterLoader._mergeConfig(existed, chapterData.npcs[npcId]);
-                    console.log(`[ChapterLoader] NPC ${npcId} 跨章合并（保留已有美术/商店配置，并入本章内容）`);
+                    Logger.log(`[ChapterLoader] NPC ${npcId} 跨章合并（保留已有美术/商店配置，并入本章内容）`);
                 } else {
                     gameConfig.registeredNPCConfigs[npcId] = chapterData.npcs[npcId];
                 }
                 registeredCount++;
             }
-            console.log(`[ChapterLoader] 注册 ${registeredCount} 个NPC配置 (${chapterId})`);
+            Logger.log(`[ChapterLoader] 注册 ${registeredCount} 个NPC配置 (${chapterId})`);
         }
 
         // 2. 注册任务配置
@@ -64,7 +64,7 @@ class ChapterLoader {
                 gameConfig.registeredQuests[chapterId] = {};
             }
             Object.assign(gameConfig.registeredQuests[chapterId], chapterData.quests);
-            console.log(`[ChapterLoader] 注册 ${Object.keys(chapterData.quests).length} 个任务 (${chapterId})`);
+            Logger.log(`[ChapterLoader] 注册 ${Object.keys(chapterData.quests).length} 个任务 (${chapterId})`);
         }
 
         // 3. 注册怪物配置
@@ -75,7 +75,7 @@ class ChapterLoader {
             for (const monsterId in chapterData.monsters) {
                 gameConfig.registeredMonsters[monsterId] = chapterData.monsters[monsterId];
             }
-            console.log(`[ChapterLoader] 注册 ${Object.keys(chapterData.monsters).length} 个怪物 (${chapterId})`);
+            Logger.log(`[ChapterLoader] 注册 ${Object.keys(chapterData.monsters).length} 个怪物 (${chapterId})`);
         }
 
         // 4. 注册地图配置
@@ -86,7 +86,7 @@ class ChapterLoader {
             for (const mapId in chapterData.maps) {
                 gameConfig.registeredMaps[mapId] = chapterData.maps[mapId];
             }
-            console.log(`[ChapterLoader] 注册 ${Object.keys(chapterData.maps).length} 个地图 (${chapterId})`);
+            Logger.log(`[ChapterLoader] 注册 ${Object.keys(chapterData.maps).length} 个地图 (${chapterId})`);
         }
 
         // 5. 注册物品配置
@@ -98,7 +98,7 @@ class ChapterLoader {
         }
 
         this.loadedChapters.add(chapterId);
-        console.log(`[ChapterLoader] 章节 ${chapterId} 注册完成`);
+        Logger.log(`[ChapterLoader] 章节 ${chapterId} 注册完成`);
         return true;
     }
 

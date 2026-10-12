@@ -106,8 +106,8 @@ class BoatNavigationMiniGame extends MiniGame {
     /**
      * 开始游戏（重进小游戏时全部重置；河道范围沿用已解析的结果）
      */
-    start() {
-        super.start();
+    start(params, services) {
+        super.start(params, services);
         this.obstacles = [];
         this.obstacleSpawnTimer = 0;
         this.obstacleSpawnEnabled = true;
@@ -601,18 +601,17 @@ class BoatNavigationMiniGame extends MiniGame {
     }
 
     /**
-     * 从 ResourceManager 缓存同步取图（Main.preloadInitialResources 已预加载）。
+     * 从缓存同步取图（通过基类服务适配器；未注入服务时回落 ResourceManager 单例）。
      * 取不到就是 null → 渲染走程序化回退。
      */
     _loadResources() {
         try {
-            const rm = ResourceManager.getInstance();
-            this.backgroundImage = rm.getCachedImage('miniGame.xingzhou_bg') || null;
-            this.boatImage = rm.getCachedImage('miniGame.xingzhou_boat') || null;
-            this.rockImage = rm.getCachedImage('miniGame.xingzhou_rock') || null;
-            this.woodImage = rm.getCachedImage('miniGame.xingzhou_wood') || null;
+            this.backgroundImage = this.getServiceImage('miniGame.xingzhou_bg') || null;
+            this.boatImage = this.getServiceImage('miniGame.xingzhou_boat') || null;
+            this.rockImage = this.getServiceImage('miniGame.xingzhou_rock') || null;
+            this.woodImage = this.getServiceImage('miniGame.xingzhou_wood') || null;
             if (!this.riverBand) {
-                this._loadRiverBand(rm.getCachedImage('miniGame.xingzhou_collision'));
+                this._loadRiverBand(this.getServiceImage('miniGame.xingzhou_collision'));
             }
         } catch (error) {
             console.warn('[逆流送灯] 美术资源读取失败，改用程序化绘制：', error);

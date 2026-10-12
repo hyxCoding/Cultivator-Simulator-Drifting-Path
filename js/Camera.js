@@ -114,12 +114,16 @@ class Camera {
 
     /**
      * 获取实际渲染位置（包含抖动偏移）
+     *
+     * 性能：返回**复用的缓存对象**（每帧被 20+ 处调用，避免每次都新建对象产生 GC 压力）。
+     * ⚠ 返回值为只读快照，**请勿修改**，也不要跨帧长期持有（下一帧会被覆盖）；
+     *   若需长期保存，请自行 `{ x: p.x, y: p.y }` 复制。
      */
     getRenderPosition() {
-        return {
-            x: this.x + (this.shakeOffsetX || 0),
-            y: this.y + (this.shakeOffsetY || 0),
-        };
+        const pos = this._renderPos || (this._renderPos = { x: 0, y: 0 });
+        pos.x = this.x + (this.shakeOffsetX || 0);
+        pos.y = this.y + (this.shakeOffsetY || 0);
+        return pos;
     }
 
     /**

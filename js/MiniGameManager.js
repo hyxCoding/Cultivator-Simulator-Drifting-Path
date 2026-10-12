@@ -15,6 +15,7 @@ class MiniGameManager {
         // _runToken 每次 startMiniGame +1，_settledRunToken 记录已经结算过的那一局。
         this._runToken = 0;
         this._settledRunToken = -1;
+        this._currentParams = {};        // 本局启动参数（主游戏注入，见 startMiniGame）
         
         // 回调
         this.onGameStart = null;    // 小游戏开始回调 (gameId, miniGame) => void
@@ -45,9 +46,11 @@ class MiniGameManager {
     /**
      * 开始小游戏
      * @param {string} gameId - 小游戏ID
+     * @param {Object} [params] - 主游戏注入的启动参数（纯数据，见 GameConfig.miniGames[gameId]）
+     * @param {Object} [services] - 可选服务适配器（资源 / 音频），不传则由小游戏回落全局单例
      * @returns {boolean} 是否开始成功
      */
-    startMiniGame(gameId) {
+    startMiniGame(gameId, params = {}, services = null) {
         const miniGame = this.miniGames.get(gameId);
         
         if (!miniGame) {
@@ -64,12 +67,13 @@ class MiniGameManager {
         this.isPlaying = true;
         this.isFinished = false;
         this._runToken += 1;              // 新一局：结算闸门随之翻页（见构造函数说明）
+        this._currentParams = params || {};
         
         // 绑定小游戏回调
         this.bindMiniGameCallbacks(miniGame);
         
-        // 开始小游戏
-        miniGame.start();
+        // 开始小游戏（把启动参数与服务注入进去 —— 小游戏与主游戏的「启动」通信唯一入口）
+        miniGame.start(this._currentParams, services);
         
         if (this.onGameStart) {
             this.onGameStart(gameId, miniGame);
@@ -205,6 +209,13 @@ class MiniGameManager {
             return this.currentMiniGame.result;
         }
         return null;
+    }
+
+    /**
+     * 获取本局启动参数
+     */
+    getCurrentParams() {
+        return this._currentParams;
     }
 
     /**

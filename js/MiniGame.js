@@ -13,7 +13,16 @@ class MiniGame {
         this.id = config.id || `minigame_${Date.now()}`;
         this.name = config.name || '小游戏';
         this.resources = config.resources || { images: {}, audio: {} };
-        
+
+        // ========== 与主游戏的通信契约（唯一出入口）==========
+        // 小游戏与主游戏只在「启动」与「结束」两个时刻通信：
+        //   · 启动：主游戏通过 start(params, services) 注入纯数据参数与可选服务适配器；
+        //   · 结束：小游戏通过 onComplete/onFail 回传 result（{success, score, ...}），
+        //          由主游戏据此更新任务 / 物品 / 剧情状态。
+        // 小游戏内部不得直接读写 Player / QuestSystem / 主游戏实例等任何主游戏状态。
+        this.params = {};       // 启动参数（由主游戏注入，见 GameConfig.miniGames[gameId]）
+        this.services = null;   // 可选服务适配器 { getImage, playBgm, stopBgm, playSfx }
+
         // ========== 玩家精灵显示尺寸（与大地图一致） ==========
         // 大地图 Player 的精灵帧是 32×32，绘制时按 Player.width*2 × Player.height*2
         // = 48×64 输出（见 js/Player.js 的 render）。小游戏里如果按 32×32 原尺寸画，
@@ -53,9 +62,21 @@ class MiniGame {
     }
 
     /**
-     * 开始小游戏
+     * 开始小游戏（主游戏唯一启动入口）
+     * @param {Object} [params] - 主游戏注入的纯数据参数（时间限制 / 满分 / 玩法参数）
+     * @param {Object} [services] - 可选服务适配器 { getImage, playBgm, stopBgm, playSfx }
      */
-    start() {
+    start(params = {}, services = null) {
+        this.params = params || {};
+        if (services) this.services = services;
+
+        // 启动参数可覆盖基础配置（未提供时沿用构造时的默认值）
+        if (this.params.timeLimit !== undefined) this.timeLimit = this.params.timeLimit;
+        if (this.params.maxScore !== undefined) this.maxScore = this.params.maxScore;
+
+        // 交给子类读取自己的玩法参数（默认无操作）
+        this.applyParams(this.params);
+
         this.isRunning = true;
         this.isPaused = false;
         this.isCompleted = false;
@@ -63,6 +84,57 @@ class MiniGame {
         this.isWinLocked = false;      // 新一局解锁（见构造函数的「胜利锁定」说明）
         this.gameTimer = 0;
         this.score = 0;
+    }
+
+    /**
+     * 子类覆写：读取启动参数（默认无操作）
+     * 约定：这里只读 this.params 里的纯数据，不得触碰主游戏状态。
+     * @param {Object} params
+     */
+    applyParams(params) {}
+
+    // ==================== 服务适配器（资源 / 音频）====================
+    // 主游戏可通过 services 注入资源与音频能力，使小游戏与具体单例解耦；
+    // 未注入时回落到全局单例（ResourceManager / gameAudio），保证向后兼容。
+
+    /** 取一张已缓存的图片（缺服务时回落 ResourceManager） */
+    getServiceImage(key) {
+        if (this.services && typeof this.services.getImage === 'function') {
+            return this.services.getImage(key);
+        }
+        if (typeof ResourceManager !== 'undefined') {
+            return ResourceManager.getInstance().getCachedImage(key);
+        }
+        return null;
+    }
+
+    /** 异步加载一张图片（缺服务时回落 ResourceManager.loadImage），返回 Promise<Image> */
+    loadServiceImage(key) {
+        if (this.services && typeof this.services.loadImage === 'function') {
+            return this.services.loadImage(key);
+        }
+        if (typeof ResourceManager !== 'undefined') {
+            return ResourceManager.getInstance().loadImage(key);
+        }
+        return Promise.reject(new Error('no image service'));
+    }
+
+    /** 播放背景音乐（缺服务时回落 gameAudio） */
+    playBgm(key) {
+        if (this.services && typeof this.services.playBgm === 'function') { this.services.playBgm(key); return; }
+        if (typeof gameAudio !== 'undefined' && gameAudio) gameAudio.playBgm(key);
+    }
+
+    /** 停止背景音乐（key 省略时停当前曲） */
+    stopBgm(key) {
+        if (this.services && typeof this.services.stopBgm === 'function') { this.services.stopBgm(key); return; }
+        if (typeof gameAudio !== 'undefined' && gameAudio) gameAudio.stopBgm(key);
+    }
+
+    /** 播放一次性音效（缺服务时回落 gameAudio） */
+    playSfx(key) {
+        if (this.services && typeof this.services.playSfx === 'function') { this.services.playSfx(key); return; }
+        if (typeof gameAudio !== 'undefined' && gameAudio) gameAudio.playSfx(key);
     }
 
     /**
